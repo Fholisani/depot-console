@@ -1,0 +1,2656 @@
+openapi: 3.1.0
+info:
+  title: Depot API
+  version: v1
+  summary: Multi-tenant object storage with versioning, lifecycle rules, search and webhooks.
+  description: |
+    Contract for the public `/v1` API of Depot. Written from the server code (controllers,
+    services, error catalogue), not generated, so status codes, envelopes and errors are exact.
+
+    ## Response envelope
+    Every JSON response under `/v1` uses the stokvel envelope:
+
+    - success: `{"data": <payload>, "errors": [], "message": null}`
+    - failure: `{"data": null, "errors": [<Error>, ...], "message": "<CATEGORY>"}`
+
+    Send `Accept: application/problem+json` to receive failures as RFC 9457 problem documents
+    instead. Downloads, exports, the manifest and the progress stream are not wrapped.
+
+    Every response carries `X-Request-Id`; quote it when reporting a problem.
+
+    ## Authentication
+    - **JWT**: a Keycloak access token from realm `depot` (`https://fmash.online/auth/realms/depot`),
+      audience `depot`, sent as `Authorization: Bearer <jwt>`.
+    - **API key**: a `dpt_…` key, sent as `Authorization: Bearer dpt_…` or in `X-Depot-Api-Key`.
+      A key belongs to one tenant and has a scope: read-only or read-write, for all namespaces or a
+      listed set. Keys cannot manage keys.
+
+    A user who belongs to several tenants selects one with `X-Depot-Tenant: <slug>`.
+
+    ### Roles
+    A signed-in user acts with their role in the tenant (`403 INSUFFICIENT_ROLE` otherwise; the
+    error's `details` name the caller's `role` and the `required` one):
+
+    | | viewer | member | admin, owner |
+    |---|---|---|---|
+    | read: list, get, download, search, export, usage | yes | yes | yes |
+    | change objects: upload, tags, delete and undelete, restore, copy | | yes | yes |
+    | setup: namespaces, lifecycle rules, webhooks, API keys; purge versions | | | yes |
+
+    ### API key scope
+    A key reaches only the namespaces in its scope, and a read-only key changes nothing
+    (`403 INSUFFICIENT_SCOPE`):
+    - namespace lists show only covered namespaces; creating a namespace needs a read-write key
+      for all namespaces;
+    - copy needs read access to the source namespace and write access to the target;
+    - tenant-wide reads that omit `namespace` (search, lookup by `externalRef`, export) are
+      narrowed to the key's namespace when it has exactly one, and refused when it has several
+      (pass `namespace`).
+
+    ## First login
+    After sign-up and email verification, call `GET /v1/tenant` once. It activates the tenant
+    (`PENDING_VERIFICATION` → `ACTIVE`) and returns a first API key, shown only that one time.
+    Other tenant-scoped calls answer `403 TENANT_SUSPENDED` until then.
+
+    ## Concurrency
+    Object downloads return `ETag: "<versionId>"`. Writes that accept `If-Match` (delete, restore,
+    tags) answer `412 PRECONDITION_FAILED` when it does not match the current version. `*` matches
+    any existing object; weak tags never match.
+
+    ## Errors
+    `errors[].reason` is the stable machine-readable name to branch on; `errors[].code` is the
+    published numeric code. The full catalogue is in the `ErrorReason` schema.
+  contact:
+    name: Depot
+    url: https://fmash.online/depot-console/
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+
+servers:
+  - url: https://fmash.online/depot
+    description: 'Production (active slot; send `X-Slot: Passive` to reach the passive slot)'
+  - url: http://localhost:18080
+    description: Local development (`scripts/run-dev.sh`)
+
+security:
+  - bearer: []
+  - apiKey: []
+
+tags:
+  - name: Signup
+    description: Public self-service sign-up and verification email.
+  - name: Tenant
+    description: The signed-in tenant, first-login activation and onboarding checklist.
+  - name: API keys
+    description: Tenant API keys. Only a signed-in owner or admin (JWT) can manage them.
+  - name: Namespaces
+    description: Containers for objects, with their storage, versioning and access settings.
+  - name: Uploads
+    description: Single-request and resumable multipart uploads straight to storage.
+  - name: Objects
+    description: Object metadata and content download.
+  - name: Versions
+    description: Delete, undelete, restore and purge object versions.
+  - name: Tags
+    description: Key-value tags on an object's current version.
+  - name: Search
+    description: Full-text and filtered search, and lookup by external reference.
+  - name: Progress
+    description: Upload and verification progress, polled or streamed.
+  - name: Copy and export
+    description: Server-side copy and bulk export.
+  - name: Lifecycle
+    description: Rules that transition or expire objects automatically.
+  - name: Webhooks
+    description: Signed HTTP callbacks for object events.
+  - name: Usage
+    description: Storage, traffic and plan limits for the tenant.
+  - name: Public
+    description: Unauthenticated reads from namespaces marked public.
+  - name: Operator
+    description: Platform operation across tenants. Requires the `depot-operator` role.
+
+paths:
+  # ------------------------------------------------------------------ signup
+  /v1/signup:
+    post:
+      tags: [Signup]
+      operationId: signUp
+      summary: Create a tenant and its owner account
+      description: |
+        Creates the tenant in `PENDING_VERIFICATION`, creates the owner in Keycloak and sends a
+        verification email. Any failure undoes all steps, so the slug is free again for a retry.
+        Limited per client address (default 5 per hour).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SignupRequest' }
+            example:
+              name: Acme Media
+              email: owner@acme.example
+              password: correct-horse-9
+              slug: acme
+      responses:
+        '201':
+          description: Sign-up accepted; the verification email is on its way.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SignupResponse' }
+              example:
+                data:
+                  slug: acme
+                  status: PENDING_VERIFICATION
+                  message: Check your email for a verification link, then sign in.
+                errors: []
+                message: null
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /v1/signup/resend:
+    post:
+      tags: [Signup]
+      operationId: resendVerification
+      summary: Send a new verification link
+      description: |
+        Always answers 202 for a well-formed address, so it cannot be used to find out who is
+        registered. Nothing is sent for unknown addresses or already-active tenants.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResendRequest' }
+      responses:
+        '202':
+          description: Accepted.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageResponse' }
+              example:
+                data: { message: 'If that address has a pending sign-up, a new link is on its way.' }
+                errors: []
+                message: null
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  # ------------------------------------------------------------------ tenant
+  /v1/tenant:
+    get:
+      tags: [Tenant]
+      operationId: getCurrentTenant
+      summary: The caller's tenant; activates it on first login
+      description: |
+        With a JWT: returns the tenant the user belongs to (choose with `X-Depot-Tenant` when there
+        are several). The first call after email verification activates the tenant and returns a
+        read-write API key in `apiKey` — shown only once. With an API key: returns the key's tenant.
+
+        This is the only tenant call that works while the tenant is `PENDING_VERIFICATION`.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+      responses:
+        '200':
+          description: The tenant.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FirstLoginResponse' }
+              example:
+                data:
+                  tenant:
+                    id: 5b3df533-779d-4248-8a14-4546542c726d
+                    slug: acme
+                    name: Acme Media
+                    status: ACTIVE
+                    plan: free
+                    role: OWNER
+                  firstLogin: true
+                  apiKey: dpt_3q2-7wE…
+                errors: []
+                message: null
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/tenant/onboarding:
+    get:
+      tags: [Tenant]
+      operationId: getOnboarding
+      summary: Onboarding checklist
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+      responses:
+        '200':
+          description: The checklist, in display order.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OnboardingResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/me:
+    get:
+      tags: [Tenant]
+      operationId: whoAmI
+      summary: Echo the resolved tenant
+      description: Authentication and tenancy probe. Requires an active tenant.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+      responses:
+        '200':
+          description: The tenant the request resolved to.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WhoAmIResponse' }
+              example:
+                data: { tenantId: 5b3df533-779d-4248-8a14-4546542c726d, tenantSlug: acme }
+                errors: []
+                message: null
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ------------------------------------------------------------------ API keys
+  /v1/api-keys:
+    get:
+      tags: [API keys]
+      operationId: listApiKeys
+      summary: List API keys
+      description: Keys are listed without their secret. JWT only; owner or admin.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+      responses:
+        '200':
+          description: The tenant's keys, including revoked ones.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeyListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [API keys]
+      operationId: createApiKey
+      summary: Create an API key
+      description: |
+        The key is returned once, in `data.key`; only its SHA-256 is stored. With no body the key
+        is read-only for all namespaces. JWT only; owner or admin.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NewApiKey' }
+            example: { readWrite: true, namespaces: [photos] }
+      responses:
+        '201':
+          description: The new key. Store it now; it cannot be shown again.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreatedApiKeyResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/api-keys/{id}:
+    delete:
+      tags: [API keys]
+      operationId: revokeApiKey
+      summary: Revoke an API key
+      description: Takes effect on the key's next request. JWT only; owner or admin.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ------------------------------------------------------------------ namespaces
+  /v1/namespaces:
+    get:
+      tags: [Namespaces]
+      operationId: listNamespaces
+      summary: List namespaces
+      description: Ordered by name. The `default` namespace is created on first use. An API key sees only the namespaces in its scope.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+      responses:
+        '200':
+          description: The tenant's namespaces.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NamespaceListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Namespaces]
+      operationId: createNamespace
+      summary: Create a namespace
+      description: Fields left out take their defaults (see `NamespaceSettings`). An API key must be read-write for all namespaces.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NamespaceSettings' }
+            example:
+              name: photos
+              publicRead: true
+              corsOrigins: [https://acme.example]
+              maxObjectSize: 104857600
+      responses:
+        '201':
+          description: Created.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NamespaceResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/namespaces/{name}:
+    parameters:
+      - $ref: '#/components/parameters/XDepotTenant'
+      - name: name
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/NamespaceName' }
+    get:
+      tags: [Namespaces]
+      operationId: getNamespace
+      summary: Get a namespace
+      responses:
+        '200':
+          description: The namespace.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NamespaceResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Namespaces]
+      operationId: updateNamespace
+      summary: Update namespace settings
+      description: Partial update. Fields left out (or null) keep their value; `name` is ignored. Requires write access to the namespace.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NamespaceSettings' }
+      responses:
+        '200':
+          description: The updated namespace.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NamespaceResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Namespaces]
+      operationId: deleteNamespace
+      summary: Delete a namespace
+      description: |
+        Deletes an empty namespace with its lifecycle rules and webhooks. A namespace that still
+        holds objects (including soft-deleted ones) answers `409 NAMESPACE_NOT_EMPTY`; `default`
+        cannot be deleted (`409 NAMESPACE_PROTECTED`). Usage history is kept, attributed to
+        `default`. Requires the admin role, or a read-write key covering the namespace.
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ------------------------------------------------------------------ uploads
+  /v1/uploads:
+    post:
+      tags: [Uploads]
+      operationId: createUpload
+      summary: Start an upload
+      description: |
+        Returns where to send the bytes. Small files get a single presigned PUT (`mode: SIMPLE`,
+        `putUrl`); larger ones a multipart session (`mode: MULTIPART`, `parts[]` with one presigned
+        request per part). Send the bytes straight to storage, then call `complete`.
+
+        Retrying with the same `Idempotency-Key` and the same input returns the same session; the
+        same key with different input is `422 IDEMPOTENCY_KEY_REUSED`. Requires write access.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateUpload' }
+            example:
+              namespace: photos
+              filename: holiday.mp4
+              contentType: video/mp4
+              size: 734003200
+              sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+              externalRef: album-42/clip-7
+      responses:
+        '201':
+          description: Upload session created.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /v1/uploads/{id}:
+    parameters:
+      - $ref: '#/components/parameters/XDepotTenant'
+      - $ref: '#/components/parameters/UploadId'
+    get:
+      tags: [Uploads]
+      operationId: getUploadStatus
+      summary: Upload status, for resuming
+      description: Lists parts already received and the part numbers still missing.
+      responses:
+        '200':
+          description: The session state.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadStatusResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '410': { $ref: '#/components/responses/Gone' }
+    delete:
+      tags: [Uploads]
+      operationId: abortUpload
+      summary: Abort an upload
+      description: Discards received parts and releases the reserved quota.
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/uploads/{id}/parts/{partNumber}:
+    post:
+      tags: [Uploads]
+      operationId: getPartTarget
+      summary: Presigned request for one part
+      description: Use when a part URL from `createUpload` expired, or to resend a part.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/UploadId'
+        - name: partNumber
+          in: path
+          required: true
+          description: 1-based part number, up to `partCount`.
+          schema: { type: integer, format: int32, minimum: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PartRequest' }
+      responses:
+        '200':
+          description: Where to send the part.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PartTargetResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '410': { $ref: '#/components/responses/Gone' }
+
+  /v1/uploads/{id}/complete:
+    post:
+      tags: [Uploads]
+      operationId: completeUpload
+      summary: Finish an upload
+      description: |
+        Assembles the parts and checks size and checksums. Missing parts answer
+        `409 UPLOAD_INCOMPLETE` (retryable: send them and complete again). For multipart uploads send
+        the part ETags returned by storage. The new version starts as `VERIFYING` or `READY`
+        depending on the namespace's `verifyBeforeReady`.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/UploadId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompleteUpload' }
+      responses:
+        '200':
+          description: The stored object version.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ObjectResultResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  # ------------------------------------------------------------------ objects
+  /v1/objects:
+    get:
+      tags: [Search]
+      operationId: findObjectsByExternalRef
+      summary: Find objects by external reference
+      description: Active objects with this `externalRef`, oldest first. Served from the database, not search. `latest` is always null here.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - name: externalRef
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+        - name: namespace
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/NamespaceName' }
+      responses:
+        '200':
+          description: Matching objects (may be empty).
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ObjectListResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      tags: [Uploads]
+      operationId: uploadObject
+      summary: Upload in one request (up to 64 MiB)
+      description: |
+        Streams the request body into storage. `Content-Length` is required; the body's
+        `Content-Type` becomes the object's content type. Send `X-Depot-Sha256` to have the server
+        check the content. Requires write access.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - name: namespace
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/NamespaceName', default: default }
+        - name: filename
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 1024 }
+        - name: externalRef
+          in: query
+          required: false
+          schema: { type: string }
+        - name: Content-Length
+          in: header
+          required: true
+          schema: { type: integer, format: int64, minimum: 0, maximum: 67108864 }
+        - name: X-Depot-Sha256
+          in: header
+          required: false
+          description: Hex SHA-256 of the body.
+          schema: { $ref: '#/components/schemas/Sha256Hex' }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, contentMediaType: application/octet-stream }
+          '*/*':
+            schema: { type: string, contentMediaType: application/octet-stream }
+      responses:
+        '201':
+          description: Stored.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ObjectResultResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /v1/objects/{id}:
+    parameters:
+      - $ref: '#/components/parameters/XDepotTenant'
+      - $ref: '#/components/parameters/ObjectId'
+    get:
+      tags: [Objects]
+      operationId: getObject
+      summary: Object metadata
+      description: Includes the newest version in `latest` (which may be a delete marker).
+      responses:
+        '200':
+          description: The object.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ObjectResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Versions]
+      operationId: deleteObject
+      summary: Delete an object (soft)
+      description: |
+        Writes a delete marker; the object can be undeleted until its versions are purged after the
+        namespace's `retentionDays`. Deleting twice is a no-op. Requires write access.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+
+  /v1/objects/{id}/versions:
+    get:
+      tags: [Versions]
+      operationId: listVersions
+      summary: List an object's versions
+      description: Newest first; purged versions are not listed.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/ObjectId'
+      responses:
+        '200':
+          description: The versions.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VersionListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/objects/{id}/content:
+    get:
+      tags: [Objects]
+      operationId: downloadObject
+      summary: Download content
+      description: |
+        `mode=redirect` (default) answers `307` with a short-lived presigned URL, so bytes come
+        straight from storage. `mode=proxy` streams through the service and supports `Range`,
+        `If-Range` and `If-None-Match`. Active content types (HTML, SVG, XML, JavaScript) are always
+        sent as attachments. Egress counts against the plan (`429 QUOTA_EGRESS_EXCEEDED`).
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/ObjectId'
+        - name: version
+          in: query
+          required: false
+          description: A specific version; default is the current one.
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/DownloadMode'
+        - name: download
+          in: query
+          required: false
+          description: 'Force `Content-Disposition: attachment`.'
+          schema: { type: boolean, default: false }
+        - $ref: '#/components/parameters/Range'
+        - $ref: '#/components/parameters/IfRange'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200': { $ref: '#/components/responses/Content' }
+        '206': { $ref: '#/components/responses/PartialContent' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '307': { $ref: '#/components/responses/Redirect' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '416': { $ref: '#/components/responses/RangeNotSatisfiable' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /v1/objects/{id}/undelete:
+    post:
+      tags: [Versions]
+      operationId: undeleteObject
+      summary: Undo a delete
+      description: No-op when the object is not deleted. `404 OBJECT_DELETED` once its versions are purged.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/ObjectId'
+      responses:
+        '200':
+          description: The restored object.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ObjectResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/objects/{id}/versions/{versionId}:
+    delete:
+      tags: [Versions]
+      operationId: purgeVersion
+      summary: Permanently delete one version
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/ObjectId'
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/objects/{id}/versions/{versionId}/restore:
+    post:
+      tags: [Versions]
+      operationId: restoreVersion
+      summary: Make an earlier version current
+      description: Creates a new current version that shares the old version's bytes. Undelete first if the object is deleted.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/ObjectId'
+        - $ref: '#/components/parameters/VersionId'
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '200':
+          description: The new version.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RestoreResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+
+  # ------------------------------------------------------------------ tags
+  /v1/objects/{id}/tags:
+    parameters:
+      - $ref: '#/components/parameters/XDepotTenant'
+      - $ref: '#/components/parameters/ObjectId'
+    get:
+      tags: [Tags]
+      operationId: getTags
+      summary: Tags of the current version
+      responses:
+        '200':
+          description: The tags, ordered by key.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TagsResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Tags]
+      operationId: replaceTags
+      summary: Replace all tags
+      description: Replaces the whole tag set of the current version. Requires write access.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TagBody' }
+            example: { tags: { album: summer-2026, fileType: VIDEO } }
+      responses:
+        '200':
+          description: The new tags.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TagsResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+
+  # ------------------------------------------------------------------ search
+  /v1/search:
+    get:
+      tags: [Search]
+      operationId: searchObjects
+      summary: Search objects
+      description: |
+        Full-text and filtered search over active objects with a servable current version.
+        Results are eventually consistent (indexed from events). Page with `nextCursor`.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - name: q
+          in: query
+          required: false
+          description: Free text over filename and external reference.
+          schema: { type: string }
+        - name: namespace
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/NamespaceName' }
+        - name: contentType
+          in: query
+          required: false
+          schema: { type: string, examples: [image/jpeg] }
+        - name: externalRef
+          in: query
+          required: false
+          schema: { type: string }
+        - name: tag
+          in: query
+          required: false
+          description: Tag filter `key:value`; repeat for several (AND), at most 5.
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 5
+            items: { type: string, pattern: '^[A-Za-z0-9_.-]{1,64}:.*$', examples: ['album:summer-2026'] }
+        - name: size
+          in: query
+          required: false
+          schema: { type: integer, format: int32, minimum: 1, maximum: 100, default: 20 }
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque `nextCursor` from the previous page.
+          schema: { type: string }
+      responses:
+        '200':
+          description: A page of results.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SearchResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  # ------------------------------------------------------------------ progress
+  /v1/objects/{id}/progress:
+    get:
+      tags: [Progress]
+      operationId: getProgress
+      summary: Upload and verification progress
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/ObjectId'
+        - $ref: '#/components/parameters/VersionQuery'
+      responses:
+        '200':
+          description: Current progress.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProgressResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/objects/{id}/progress/stream:
+    get:
+      tags: [Progress]
+      operationId: streamProgress
+      summary: Progress as Server-Sent Events
+      description: |
+        Sends `event: progress` (data: `Progress` JSON) first and whenever percent or status
+        changes, then one `event: done` when `terminal` is true, and closes. The stream ends after
+        30 minutes at most. Events are not wrapped in the envelope.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/ObjectId'
+        - $ref: '#/components/parameters/VersionQuery'
+      responses:
+        '200':
+          description: Event stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+              example: |
+                event: progress
+                data: {"objectId":"…","versionId":"…","status":"VERIFYING","phase":"VERIFY","percent":62,"bytesDone":455081984,"bytesTotal":734003200,"terminal":false}
+
+                event: done
+                data: {"objectId":"…","versionId":"…","status":"READY","phase":"DONE","percent":100,"bytesDone":734003200,"bytesTotal":734003200,"terminal":true}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ------------------------------------------------------------------ copy and export
+  /v1/objects/{id}/copy:
+    post:
+      tags: [Copy and export]
+      operationId: copyObject
+      summary: Copy an object
+      description: |
+        Server-side copy of the current version into a new object (sharing the stored bytes).
+        Target namespace defaults to `default`. Requires read access to the source namespace and
+        write access to the target.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/ObjectId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CopyRequest' }
+      responses:
+        '201':
+          description: The new object.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CopyResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/export/archive:
+    get:
+      tags: [Copy and export]
+      operationId: exportArchive
+      summary: Download all objects as a ZIP
+      description: |
+        Streams a store-only ZIP of every active object's current version (newest first), named
+        `<namespace>/<filename>` (made unique). Omit `namespace` for all namespaces.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - name: namespace
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/NamespaceName' }
+      responses:
+        '200':
+          description: The archive.
+          headers:
+            Content-Disposition:
+              schema: { type: string, const: 'attachment; filename="depot-export.zip"' }
+            Content-Length:
+              schema: { type: integer, format: int64 }
+          content:
+            application/zip:
+              schema: { type: string, contentMediaType: application/zip }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/export/manifest:
+    get:
+      tags: [Copy and export]
+      operationId: exportManifest
+      summary: Checksum manifest of the export
+      description: |
+        Plain text, one line per archive entry: `<sha256 or ->  <size>  <path>` (two spaces),
+        after a `# sha256  size  path` header line. Paths match the ZIP entry names.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - name: namespace
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/NamespaceName' }
+      responses:
+        '200':
+          description: The manifest.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: |
+                # sha256  size  path
+                9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08  734003200  photos/holiday.mp4
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ------------------------------------------------------------------ lifecycle
+  /v1/namespaces/{namespace}/lifecycle-rules:
+    parameters:
+      - $ref: '#/components/parameters/XDepotTenant'
+      - $ref: '#/components/parameters/NamespacePath'
+    get:
+      tags: [Lifecycle]
+      operationId: listLifecycleRules
+      summary: List lifecycle rules
+      responses:
+        '200':
+          description: The rules, ordered by name.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LifecycleRuleListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Lifecycle]
+      operationId: createLifecycleRule
+      summary: Create a lifecycle rule
+      description: New rules are enabled. Preview a rule before relying on it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LifecycleRuleBody' }
+            example:
+              name: archive-old-videos
+              filter: { contentTypePrefix: 'video/', olderThanDays: 90 }
+              actions: [{ type: transition, tier: archive }]
+      responses:
+        '201':
+          description: The rule.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LifecycleRuleResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/namespaces/{namespace}/lifecycle-rules/{ruleId}:
+    delete:
+      tags: [Lifecycle]
+      operationId: deleteLifecycleRule
+      summary: Delete a lifecycle rule
+      description: Idempotent; deleting an unknown rule also answers 204.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/NamespacePath'
+        - $ref: '#/components/parameters/RuleId'
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/namespaces/{namespace}/lifecycle-rules/{ruleId}/enabled:
+    post:
+      tags: [Lifecycle]
+      operationId: setLifecycleRuleEnabled
+      summary: Enable or disable a rule
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/NamespacePath'
+        - $ref: '#/components/parameters/RuleId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EnabledBody' }
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/namespaces/{namespace}/lifecycle-rules/{ruleId}/preview:
+    get:
+      tags: [Lifecycle]
+      operationId: previewLifecycleRule
+      summary: Dry run a rule
+      description: How many objects and bytes the rule would act on now. Changes nothing.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/NamespacePath'
+        - $ref: '#/components/parameters/RuleId'
+      responses:
+        '200':
+          description: The preview.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LifecyclePreviewResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ------------------------------------------------------------------ webhooks
+  /v1/namespaces/{namespace}/webhooks:
+    parameters:
+      - $ref: '#/components/parameters/XDepotTenant'
+      - $ref: '#/components/parameters/NamespacePath'
+    get:
+      tags: [Webhooks]
+      operationId: listWebhooks
+      summary: List webhooks
+      description: Signing secrets are never listed.
+      responses:
+        '200':
+          description: The webhooks, oldest first.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Webhooks]
+      operationId: createWebhook
+      summary: Register a webhook
+      description: |
+        Returns the signing secret once. Private, loopback and link-local targets are refused
+        (`422 WEBHOOK_URL_NOT_ALLOWED`). `events` defaults to `object.ready` and `object.corrupted`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookBody' }
+            example: { url: 'https://hooks.acme.example/depot', events: [object.ready, object.deleted] }
+      responses:
+        '201':
+          description: The webhook with its secret.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreatedWebhookResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /v1/namespaces/{namespace}/webhooks/{id}:
+    delete:
+      tags: [Webhooks]
+      operationId: deleteWebhook
+      summary: Delete a webhook
+      description: Also deletes its delivery history. Idempotent.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/NamespacePath'
+        - $ref: '#/components/parameters/WebhookId'
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/namespaces/{namespace}/webhooks/{id}/enabled:
+    post:
+      tags: [Webhooks]
+      operationId: setWebhookEnabled
+      summary: Enable or disable a webhook
+      description: Enabling resets `failureCount` to 0.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/NamespacePath'
+        - $ref: '#/components/parameters/WebhookId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EnabledBody' }
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ------------------------------------------------------------------ usage
+  /v1/usage:
+    get:
+      tags: [Usage]
+      operationId: getUsage
+      summary: Usage and limits
+      description: Current storage, this calendar month's traffic (UTC) and the last 30 days.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+      responses:
+        '200':
+          description: The usage report.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsageResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ------------------------------------------------------------------ public
+  /v1/public/{tenant}/{namespace}/{id}:
+    get:
+      tags: [Public]
+      operationId: getPublicContent
+      summary: Public download
+      description: |
+        Unauthenticated read from a namespace with `publicRead: true`, usable directly in `<img>`
+        and `<video>`. Same delivery modes and headers as `downloadObject`; cached for 60 seconds.
+      security: []
+      parameters:
+        - name: tenant
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/TenantSlug' }
+        - $ref: '#/components/parameters/NamespacePath'
+        - $ref: '#/components/parameters/ObjectId'
+        - $ref: '#/components/parameters/DownloadMode'
+        - $ref: '#/components/parameters/Range'
+        - $ref: '#/components/parameters/IfRange'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200': { $ref: '#/components/responses/Content' }
+        '206': { $ref: '#/components/responses/PartialContent' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '307': { $ref: '#/components/responses/Redirect' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '416': { $ref: '#/components/responses/RangeNotSatisfiable' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  # ------------------------------------------------------------------ operator
+  /v1/operator/tenants:
+    get:
+      tags: [Operator]
+      operationId: operatorListTenants
+      summary: All tenants with their usage
+      security:
+        - bearer: []
+      responses:
+        '200':
+          description: Tenants ordered by slug.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperatorTenantListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Operator]
+      operationId: operatorCreateTenant
+      summary: Create an active tenant
+      description: Idempotent by slug (an existing tenant returns its id). Creates the `default` namespace.
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OperatorCreateTenant' }
+      responses:
+        '201':
+          description: The tenant id.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IdResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/operator/tenants/{id}/status:
+    post:
+      tags: [Operator]
+      operationId: operatorSetTenantStatus
+      summary: Suspend, reactivate or mark a tenant for deletion
+      security:
+        - bearer: []
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [ACTIVE, SUSPENDED, DELETING] }
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/operator/tenants/{id}/plan:
+    post:
+      tags: [Operator]
+      operationId: operatorSetTenantPlan
+      summary: Move a tenant to another plan
+      security:
+        - bearer: []
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan]
+              properties:
+                plan: { $ref: '#/components/schemas/PlanName' }
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/operator/plans:
+    get:
+      tags: [Operator]
+      operationId: operatorListPlans
+      summary: List plans
+      security:
+        - bearer: []
+      responses:
+        '200':
+          description: Plans and their quotas.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/operator/plans/{name}:
+    put:
+      tags: [Operator]
+      operationId: operatorUpsertPlan
+      summary: Create or replace a plan
+      security:
+        - bearer: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/PlanName' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quotas: { $ref: '#/components/schemas/PlanQuotas' }
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/operator/billing:
+    get:
+      tags: [Operator]
+      operationId: operatorBilling
+      summary: Daily usage per tenant for a date range
+      security:
+        - bearer: []
+      parameters:
+        - name: from
+          in: query
+          required: true
+          description: First day, inclusive.
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: true
+          description: Last day, inclusive.
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Rows ordered by tenant, then day.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BillingResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/operator/integrity:
+    get:
+      tags: [Operator]
+      operationId: operatorIntegrity
+      summary: Versions that failed integrity checks
+      security:
+        - bearer: []
+      responses:
+        '200':
+          description: Corrupt, missing or failed versions.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrityResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/operator/reconcile:
+    post:
+      tags: [Operator]
+      operationId: operatorReconcile
+      summary: Recount usage and report drift
+      security:
+        - bearer: []
+      responses:
+        '200':
+          description: Counters that differed from the recount (now corrected).
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReconcileResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/operator/dead-letters:
+    get:
+      tags: [Operator]
+      operationId: operatorDeadLetters
+      summary: Events that could not be published
+      security:
+        - bearer: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, format: int32, minimum: 1, maximum: 1000, default: 100 }
+      responses:
+        '200':
+          description: Newest first.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeadLetterResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+# =====================================================================================================
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT or dpt_ API key
+      description: |
+        A Keycloak access token from realm `depot` (audience `depot`), or an API key `dpt_…`.
+        Get a token from `https://fmash.online/auth/realms/depot` with client `depot-console`
+        (authorization code with PKCE). Operator endpoints need a JWT carrying the realm role
+        `depot-operator`.
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-Depot-Api-Key
+      description: An API key `dpt_…`. Only its SHA-256 is stored; it is shown once at creation.
+
+  headers:
+    X-Request-Id:
+      description: Identifier of this request; also in every error object.
+      schema: { type: string }
+    Retry-After:
+      description: Seconds to wait before retrying.
+      schema: { type: integer, minimum: 1 }
+    ETag:
+      description: The version id in quotes, `"<versionId>"`.
+      schema: { type: string, examples: ['"a3c1f6d2-6f3e-4c5a-9a7d-2b1e0f9c8d7e"'] }
+
+  parameters:
+    XDepotTenant:
+      name: X-Depot-Tenant
+      in: header
+      required: false
+      description: Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys.
+      schema: { $ref: '#/components/schemas/TenantSlug' }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Makes `createUpload` safe to retry.
+      schema: { type: string, maxLength: 255 }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: ETag of the current version (`"<versionId>"`), a comma list, or `*`.
+      schema: { type: string }
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      description: Answers `304` when it matches the version's ETag.
+      schema: { type: string }
+    Range:
+      name: Range
+      in: header
+      required: false
+      description: A single byte range (`bytes=0-1023`, `bytes=1024-`, `bytes=-500`). `mode=proxy` only.
+      schema: { type: string, examples: ['bytes=0-1048575'] }
+    IfRange:
+      name: If-Range
+      in: header
+      required: false
+      description: Send the full content instead of the range when this ETag is stale.
+      schema: { type: string }
+    DownloadMode:
+      name: mode
+      in: query
+      required: false
+      description: '`redirect`: 307 to a presigned URL. `proxy`: stream through the service.'
+      schema: { type: string, enum: [redirect, proxy], default: redirect }
+    ObjectId:
+      name: id
+      in: path
+      required: true
+      description: Object id.
+      schema: { type: string, format: uuid }
+    VersionId:
+      name: versionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    VersionQuery:
+      name: version
+      in: query
+      required: false
+      description: A specific version; default is the newest non-purged one.
+      schema: { type: string, format: uuid }
+    UploadId:
+      name: id
+      in: path
+      required: true
+      description: Upload session id (`uploadId`).
+      schema: { type: string, format: uuid }
+    NamespacePath:
+      name: namespace
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/NamespaceName' }
+    RuleId:
+      name: ruleId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    WebhookId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    TenantId:
+      name: id
+      in: path
+      required: true
+      description: Tenant id.
+      schema: { type: string, format: uuid }
+
+  responses:
+    NoContent:
+      description: Done; no body.
+      headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+    Content:
+      description: The content (`mode=proxy`).
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+        Last-Modified: { schema: { type: string } }
+        Accept-Ranges: { schema: { type: string, const: bytes } }
+        Content-Disposition: { schema: { type: string, examples: ['inline; filename="holiday.mp4"'] } }
+        Content-Length: { schema: { type: integer, format: int64 } }
+        Content-Digest:
+          description: '`sha-256=:<base64>:` once the version is `READY`.'
+          schema: { type: string }
+        X-Depot-Verification:
+          description: '`pending` while the content is not yet verified.'
+          schema: { type: string, const: pending }
+        Cache-Control: { schema: { type: string } }
+      content:
+        application/octet-stream:
+          schema: { type: string, contentMediaType: application/octet-stream }
+        '*/*':
+          schema: { type: string, contentMediaType: application/octet-stream }
+    PartialContent:
+      description: The requested byte range (`mode=proxy`).
+      headers:
+        Content-Range: { schema: { type: string, examples: ['bytes 0-1048575/734003200'] } }
+        ETag: { $ref: '#/components/headers/ETag' }
+        Content-Length: { schema: { type: integer, format: int64 } }
+      content:
+        application/octet-stream:
+          schema: { type: string, contentMediaType: application/octet-stream }
+    NotModified:
+      description: '`If-None-Match` matched; no body.'
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+    Redirect:
+      description: Follow `Location` (a presigned storage URL, valid for a few minutes).
+      headers:
+        Location:
+          required: true
+          schema: { type: string, format: uri }
+        ETag: { $ref: '#/components/headers/ETag' }
+        Cache-Control: { schema: { type: string, const: 'private, max-age=60' } }
+    RangeNotSatisfiable:
+      description: The range lies outside the content.
+      headers:
+        Content-Range: { schema: { type: string, examples: ['bytes */734003200'] } }
+
+    BadRequest:
+      description: |
+        `TENANT_SELECTION_REQUIRED` (send `X-Depot-Tenant`), `VALIDATION_ERROR` or `MALFORMED_REQUEST`.
+      headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } }
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    ValidationError:
+      description: |
+        `VALIDATION_ERROR` (the failing field is in `errors[].field`), `MALFORMED_REQUEST` (body is
+        not valid JSON) or `TENANT_SELECTION_REQUIRED`.
+      headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            data: null
+            errors:
+              - code: 3001
+                message: The slug must be 3 to 31 characters, lowercase letters, digits and '-'
+                reason: VALIDATION_ERROR
+                field: slug
+                details: { field: slug }
+                requestId: 6f1b0c2e-8f5a-4c2b-9a1d-3e7f5b2c9d10
+            message: VALIDATION_ERROR
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    Unauthorized:
+      description: '`CREDENTIAL_INVALID`: missing, expired or invalid token or API key.'
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        WWW-Authenticate: { schema: { type: string, const: Bearer } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            data: null
+            errors:
+              - code: 3101
+                message: Authentication is required
+                reason: CREDENTIAL_INVALID
+                requestId: 9096966b-53f1-41b4-8d9b-22c84d70fdc5
+            message: UNAUTHORIZED
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    Forbidden:
+      description: |
+        `INSUFFICIENT_SCOPE` (API key does not cover the namespace or is read-only),
+        `INSUFFICIENT_ROLE`, `TENANT_SUSPENDED` (suspended, being deleted, or first login not done),
+        `EMAIL_NOT_VERIFIED`, `TENANT_NOT_RESOLVED`, `TENANT_NOT_A_MEMBER` or
+        `PASSIVE_SLOT_RESTRICTED`.
+      headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            data: null
+            errors:
+              - code: 3110
+                message: No tenant could be resolved for the request
+                reason: TENANT_NOT_RESOLVED
+                requestId: 5530e39d-3a55-4179-b5fc-eb6074a7d678
+            message: FORBIDDEN
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    NotFound:
+      description: |
+        `RESOURCE_NOT_FOUND`, `NAMESPACE_NOT_FOUND`, `UPLOAD_NOT_FOUND`, `VERSION_NOT_FOUND`,
+        `OBJECT_DELETED` or `NOT_FOUND`.
+      headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } }
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    Conflict:
+      description: |
+        `SLUG_TAKEN`, `NAMESPACE_EXISTS`, `NAMESPACE_PROTECTED`, `NAMESPACE_NOT_EMPTY`, `UPLOAD_INCOMPLETE` (retryable),
+        or the object is not servable yet: `OBJECT_UPLOADING`, `OBJECT_VERIFYING`, `OBJECT_PROCESSING`.
+      headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } }
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    Gone:
+      description: '`UPLOAD_EXPIRED`: the session expired and was aborted; start a new upload.'
+      headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } }
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    PreconditionFailed:
+      description: '`PRECONDITION_FAILED`: `If-Match` did not match the current version.'
+      headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } }
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    PayloadTooLarge:
+      description: '`QUOTA_STORAGE_EXCEEDED`, `OBJECT_TOO_LARGE` or `PAYLOAD_TOO_LARGE`.'
+      headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } }
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    UnsupportedMediaType:
+      description: '`CONTENT_TYPE_NOT_ALLOWED` (namespace rules) or `UNSUPPORTED_MEDIA_TYPE`.'
+      headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } }
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    UnprocessableEntity:
+      description: |
+        `IDEMPOTENCY_KEY_REUSED`, `TIER_NOT_ALLOWED`, `WEBHOOK_URL_NOT_ALLOWED`, or an integrity
+        failure: `UPLOAD_CHECKSUM_MISMATCH`, `UPLOAD_SIZE_MISMATCH`, `PART_CHECKSUM_MISMATCH`
+        (retryable: resend that part). Integrity failures have envelope `message: INTEGRITY_ERROR`.
+      headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } }
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    TooManyRequests:
+      description: |
+        `RATE_LIMITED` (sign-up per address, or too many open uploads) or `QUOTA_EGRESS_EXCEEDED`
+        (monthly egress used up; the message gives the reset date). Both are retryable.
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Retry-After: { $ref: '#/components/headers/Retry-After' }
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } }
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    InternalError:
+      description: '`OBJECT_CORRUPT`, `OBJECT_MISSING` or `INTERNAL_ERROR`. Quote `requestId` when reporting.'
+      headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } }
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    ServiceUnavailable:
+      description: |
+        A dependency is down; retry later. `STORAGE_UNAVAILABLE`, `DATABASE_UNAVAILABLE`,
+        `SEARCH_UNAVAILABLE` or `IDENTITY_UNAVAILABLE`.
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Retry-After: { $ref: '#/components/headers/Retry-After' }
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } }
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+
+  schemas:
+    # -------------------------------------------------------------- envelope and errors
+    Envelope:
+      type: object
+      description: Success envelope. Each response schema narrows `data`.
+      required: [data, errors, message]
+      properties:
+        data: {}
+        errors:
+          type: array
+          maxItems: 0
+          items: {}
+        message: { type: 'null' }
+    ErrorEnvelope:
+      type: object
+      required: [data, errors, message]
+      properties:
+        data: { type: 'null' }
+        errors:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/Error' }
+        message:
+          type: string
+          description: Category of the first error.
+          enum: [VALIDATION_ERROR, INTEGRITY_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND,
+                 REQUEST_NOT_SUPPORTED, CONFLICT, LIMIT_EXCEEDED, SERVER_ERROR, ERROR]
+    Error:
+      type: object
+      required: [code, message, reason, requestId]
+      properties:
+        code:
+          type: integer
+          description: Published numeric code (see `ErrorReason`).
+          examples: [3001]
+        message:
+          type: string
+          description: Human-readable, safe to show. Never contains internals.
+        reason: { $ref: '#/components/schemas/ErrorReason' }
+        field:
+          type: string
+          description: The request field at fault, for validation errors.
+        details:
+          type: object
+          additionalProperties: true
+        requestId: { type: string }
+    Problem:
+      type: object
+      description: 'RFC 9457 problem document, returned for `Accept: application/problem+json`.'
+      required: [type, title, status, detail, instance, code, reason, requestId, errors]
+      properties:
+        type:
+          type: string
+          format: uri
+          examples: ['https://fmash.online/depot/errors/validation-error']
+        title: { type: string, examples: [Validation error] }
+        status: { type: integer, examples: [400] }
+        detail: { type: string }
+        instance: { type: string, description: Request path. }
+        code: { type: integer }
+        reason: { $ref: '#/components/schemas/ErrorReason' }
+        requestId: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            required: [code]
+            properties:
+              code: { type: integer }
+              field: { type: string }
+              details: { type: object, additionalProperties: true }
+    ErrorReason:
+      type: string
+      description: |
+        Stable reasons, with code, HTTP status and whether a retry can succeed:
+
+        | reason | code | HTTP | retry |
+        |---|---|---|---|
+        | VALIDATION_ERROR | 3001 | 400 | no |
+        | MALFORMED_REQUEST | 3002 | 400 | no |
+        | SLUG_TAKEN | 3007 | 409 | no |
+        | IDEMPOTENCY_KEY_REUSED | 3008 | 422 | no |
+        | NAMESPACE_EXISTS | 3010 | 409 | no |
+        | NAMESPACE_PROTECTED | 3011 | 409 | no |
+        | NAMESPACE_NOT_EMPTY | 3012 | 409 | no |
+        | CREDENTIAL_INVALID | 3101 | 401 | no |
+        | INSUFFICIENT_SCOPE | 3104 | 403 | no |
+        | INSUFFICIENT_ROLE | 3105 | 403 | no |
+        | TENANT_SUSPENDED | 3106 | 403 | no |
+        | EMAIL_NOT_VERIFIED | 3107 | 403 | no |
+        | RESOURCE_NOT_FOUND | 3108 | 404 | no |
+        | TENANT_SELECTION_REQUIRED | 3109 | 400 | no |
+        | TENANT_NOT_RESOLVED | 3110 | 403 | no |
+        | TENANT_NOT_A_MEMBER | 3111 | 403 | no |
+        | NAMESPACE_NOT_FOUND | 3112 | 404 | no |
+        | QUOTA_STORAGE_EXCEEDED | 3201 | 413 | no |
+        | QUOTA_EGRESS_EXCEEDED | 3202 | 429 | yes |
+        | OBJECT_TOO_LARGE | 3203 | 413 | no |
+        | RATE_LIMITED | 3204 | 429 | yes |
+        | UPLOAD_NOT_FOUND | 3301 | 404 | no |
+        | UPLOAD_EXPIRED | 3302 | 410 | no |
+        | UPLOAD_INCOMPLETE | 3304 | 409 | yes |
+        | UPLOAD_CHECKSUM_MISMATCH | 3305 | 422 | no |
+        | UPLOAD_SIZE_MISMATCH | 3306 | 422 | no |
+        | PART_CHECKSUM_MISMATCH | 3307 | 422 | yes |
+        | CONTENT_TYPE_NOT_ALLOWED | 3309 | 415 | no |
+        | OBJECT_UPLOADING | 3401 | 409 | yes |
+        | OBJECT_VERIFYING | 3402 | 409 | yes |
+        | OBJECT_PROCESSING | 3403 | 409 | yes |
+        | OBJECT_CORRUPT | 3404 | 500 | no |
+        | OBJECT_DELETED | 3405 | 404 | no |
+        | VERSION_NOT_FOUND | 3406 | 404 | no |
+        | PRECONDITION_FAILED | 3407 | 412 | no |
+        | OBJECT_MISSING | 3408 | 500 | no |
+        | STORAGE_UNAVAILABLE | 3501 | 503 | yes |
+        | DATABASE_UNAVAILABLE | 3502 | 503 | yes |
+        | TIER_NOT_ALLOWED | 3503 | 422 | no |
+        | IDENTITY_UNAVAILABLE | 3505 | 503 | yes |
+        | PASSIVE_SLOT_RESTRICTED | 3509 | 403 | no |
+        | JOB_NOT_FOUND | 3601 | 404 | no |
+        | SEARCH_UNAVAILABLE | 3611 | 503 | yes |
+        | WEBHOOK_URL_NOT_ALLOWED | 3621 | 422 | no |
+        | NOT_FOUND | 404 | 404 | no |
+        | METHOD_NOT_ALLOWED | 405 | 405 | no |
+        | NOT_ACCEPTABLE | 406 | 406 | no |
+        | PAYLOAD_TOO_LARGE | 413 | 413 | no |
+        | UNSUPPORTED_MEDIA_TYPE | 415 | 415 | no |
+        | RANGE_NOT_SATISFIABLE | 416 | 416 | no |
+        | INTERNAL_ERROR | 500 | 500 | no |
+      enum: [VALIDATION_ERROR, MALFORMED_REQUEST, SLUG_TAKEN, IDEMPOTENCY_KEY_REUSED, NAMESPACE_EXISTS,
+             NAMESPACE_PROTECTED, NAMESPACE_NOT_EMPTY, CREDENTIAL_INVALID, INSUFFICIENT_SCOPE, INSUFFICIENT_ROLE,
+             TENANT_SUSPENDED, EMAIL_NOT_VERIFIED, RESOURCE_NOT_FOUND, TENANT_SELECTION_REQUIRED,
+             TENANT_NOT_RESOLVED, TENANT_NOT_A_MEMBER, NAMESPACE_NOT_FOUND, QUOTA_STORAGE_EXCEEDED,
+             QUOTA_EGRESS_EXCEEDED, OBJECT_TOO_LARGE, RATE_LIMITED, UPLOAD_NOT_FOUND, UPLOAD_EXPIRED,
+             UPLOAD_INCOMPLETE, UPLOAD_CHECKSUM_MISMATCH, UPLOAD_SIZE_MISMATCH, PART_CHECKSUM_MISMATCH,
+             CONTENT_TYPE_NOT_ALLOWED, OBJECT_UPLOADING, OBJECT_VERIFYING, OBJECT_PROCESSING,
+             OBJECT_CORRUPT, OBJECT_DELETED, VERSION_NOT_FOUND, PRECONDITION_FAILED, OBJECT_MISSING,
+             STORAGE_UNAVAILABLE, DATABASE_UNAVAILABLE, TIER_NOT_ALLOWED, IDENTITY_UNAVAILABLE,
+             PASSIVE_SLOT_RESTRICTED, JOB_NOT_FOUND, SEARCH_UNAVAILABLE, WEBHOOK_URL_NOT_ALLOWED,
+             NOT_FOUND, METHOD_NOT_ALLOWED, NOT_ACCEPTABLE, PAYLOAD_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE,
+             RANGE_NOT_SATISFIABLE, INTERNAL_ERROR]
+
+    # -------------------------------------------------------------- primitives
+    TenantSlug:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9-]{2,30}$'
+      examples: [acme]
+    NamespaceName:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9-]{0,62}$'
+      examples: [photos]
+    PlanName:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9-]{0,30}$'
+      examples: [free]
+    Sha256Hex:
+      type: string
+      pattern: '^[A-Fa-f0-9]{64}$'
+      description: Hex SHA-256 (stored lowercase).
+    Tier:
+      type: string
+      description: Storage tier name. Seeded tiers are `standard` and `archive`; operators may add more.
+      examples: [standard, archive]
+    VersionStatus:
+      type: string
+      description: |
+        `UPLOADING` → `VERIFYING` → `READY`. `AVAILABLE_UNVERIFIED` is servable while verification
+        runs. `FAILED`, `CORRUPT` and `MISSING` are terminal failures; `PURGED` versions are gone.
+      enum: [UPLOADING, VERIFYING, AVAILABLE_UNVERIFIED, READY, FAILED, CORRUPT, MISSING, PURGED]
+    TenantStatus:
+      type: string
+      enum: [PENDING_VERIFICATION, ACTIVE, SUSPENDED, DELETING]
+
+    # -------------------------------------------------------------- signup and tenant
+    SignupRequest:
+      type: object
+      required: [name, email, password, slug]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100, description: Organisation or display name. }
+        email: { type: string, format: email, maxLength: 254 }
+        password:
+          type: string
+          minLength: 10
+          maxLength: 128
+          description: Must also pass the Keycloak realm policy (at least one digit).
+        slug:
+          allOf: [{ $ref: '#/components/schemas/TenantSlug' }]
+          description: |
+            Tenant identifier in URLs. Reserved: admin, api, www, depot, console, status, operator,
+            public, s3, root, system, support, help, login, signup, static, docs.
+    ResendRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+    SignupResult:
+      type: object
+      required: [slug, status, message]
+      properties:
+        slug: { $ref: '#/components/schemas/TenantSlug' }
+        status: { type: string, const: PENDING_VERIFICATION }
+        message: { type: string }
+    TenantInfo:
+      type: object
+      required: [id, slug, name, status, plan, role]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { $ref: '#/components/schemas/TenantSlug' }
+        name: { type: string }
+        status: { $ref: '#/components/schemas/TenantStatus' }
+        plan: { $ref: '#/components/schemas/PlanName' }
+        role:
+          type: string
+          description: The caller's role in the tenant; `API_KEY` for API-key callers.
+          examples: [OWNER, ADMIN, API_KEY]
+    FirstLogin:
+      type: object
+      required: [tenant, firstLogin]
+      properties:
+        tenant: { $ref: '#/components/schemas/TenantInfo' }
+        firstLogin: { type: boolean, description: True only on the call that activated the tenant. }
+        apiKey:
+          type: [string, 'null']
+          description: A read-write key for all namespaces, returned only on activation. Store it now.
+    OnboardingStep:
+      type: object
+      required: [id, title, done]
+      properties:
+        id:
+          type: string
+          enum: [verify-email, create-namespace, create-api-key, first-upload, see-object, lifecycle-rule]
+        title: { type: string }
+        done: { type: boolean }
+    WhoAmI:
+      type: object
+      required: [tenantId, tenantSlug]
+      properties:
+        tenantId: { type: string, format: uuid }
+        tenantSlug: { $ref: '#/components/schemas/TenantSlug' }
+
+    # -------------------------------------------------------------- API keys
+    ApiKeyScope:
+      type: object
+      required: [readWrite, namespaces]
+      properties:
+        readWrite: { type: boolean }
+        namespaces:
+          type: array
+          description: Namespaces the key may use; empty means all.
+          items: { $ref: '#/components/schemas/NamespaceName' }
+    NewApiKey:
+      type: object
+      properties:
+        readWrite: { type: boolean, default: false }
+        namespaces:
+          type: array
+          default: []
+          items: { $ref: '#/components/schemas/NamespaceName' }
+    ApiKey:
+      type: object
+      required: [id, scope, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        scope: { $ref: '#/components/schemas/ApiKeyScope' }
+        createdAt: { type: string, format: date-time }
+        revokedAt: { type: [string, 'null'], format: date-time }
+    CreatedApiKey:
+      type: object
+      required: [id, key, readWrite, namespaces]
+      properties:
+        id: { type: string, format: uuid }
+        key:
+          type: string
+          pattern: '^dpt_[A-Za-z0-9_-]{43}$'
+          description: The secret. Shown only in this response.
+        readWrite: { type: boolean }
+        namespaces:
+          type: array
+          items: { $ref: '#/components/schemas/NamespaceName' }
+
+    # -------------------------------------------------------------- namespaces
+    NamespaceSettings:
+      type: object
+      description: |
+        Create: `name` is required and other fields default as shown. Update: every field is
+        optional and a missing field keeps its value.
+      properties:
+        name: { $ref: '#/components/schemas/NamespaceName' }
+        defaultTier:
+          allOf: [{ $ref: '#/components/schemas/Tier' }]
+          default: standard
+        versioningMode: { type: string, enum: [ENABLED, SUSPENDED, DISABLED], default: ENABLED }
+        publicRead: { type: boolean, default: false, description: Allow unauthenticated reads via `/v1/public`. }
+        contentTypeRules:
+          type: object
+          additionalProperties: true
+          default: {}
+          description: Which content types uploads may have.
+        maxObjectSize: { type: [integer, 'null'], format: int64, exclusiveMinimum: 0, description: Bytes; null means the plan limit. }
+        variantPresets:
+          type: array
+          default: []
+          items: { type: object, additionalProperties: true }
+        corsOrigins:
+          type: array
+          default: []
+          description: Origins allowed for browser uploads and downloads; `*` or `http(s)://host[:port]`.
+          items: { type: string, pattern: '^(\*|https?://[^\s/]+)$' }
+        processors:
+          type: array
+          default: []
+          items: { type: string }
+        retentionDays:
+          type: integer
+          minimum: 0
+          maximum: 3650
+          default: 30
+          description: Days a deleted object can still be undeleted.
+        verifyBeforeReady: { type: boolean, default: false, description: Verify checksums before the version is `READY`. }
+    Namespace:
+      type: object
+      required: [id, name, defaultTier, versioningMode, publicRead, contentTypeRules, variantPresets,
+                 corsOrigins, processors, retentionDays, verifyBeforeReady, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { $ref: '#/components/schemas/NamespaceName' }
+        defaultTier: { $ref: '#/components/schemas/Tier' }
+        versioningMode: { type: string, enum: [ENABLED, SUSPENDED, DISABLED] }
+        publicRead: { type: boolean }
+        contentTypeRules: { type: object, additionalProperties: true }
+        maxObjectSize: { type: [integer, 'null'], format: int64 }
+        variantPresets: { type: array, items: { type: object, additionalProperties: true } }
+        corsOrigins: { type: array, items: { type: string } }
+        processors: { type: array, items: { type: string } }
+        retentionDays: { type: integer }
+        verifyBeforeReady: { type: boolean }
+        createdAt: { type: string, format: date-time }
+
+    # -------------------------------------------------------------- uploads
+    CreateUpload:
+      type: object
+      required: [filename, size]
+      properties:
+        namespace:
+          allOf: [{ $ref: '#/components/schemas/NamespaceName' }]
+          default: default
+        filename: { type: string, minLength: 1, maxLength: 1024 }
+        contentType: { type: string, examples: [video/mp4] }
+        size: { type: integer, format: int64, minimum: 0, description: Exact size in bytes. }
+        tier:
+          allOf: [{ $ref: '#/components/schemas/Tier' }]
+          description: Default is the namespace's `defaultTier`.
+        sha256:
+          allOf: [{ $ref: '#/components/schemas/Sha256Hex' }]
+          description: Checked on complete; strongly recommended.
+        externalRef: { type: string, description: 'Your own reference, searchable.' }
+        partSha256:
+          type: array
+          description: Base64 SHA-256 of each part, in order (multipart integrity).
+          items: { type: string, contentEncoding: base64 }
+        idempotencyKey: { type: string, description: Same as the `Idempotency-Key` header. }
+    PresignedRequest:
+      type: object
+      description: Send exactly this request to storage (method, URL and headers).
+      required: [url, method, headers, expiresAt]
+      properties:
+        url: { type: string, format: uri }
+        method: { type: string, examples: [PUT] }
+        headers: { type: object, additionalProperties: { type: string } }
+        expiresAt: { type: string, format: date-time }
+    PartTarget:
+      type: object
+      required: [partNumber, size, request]
+      properties:
+        partNumber: { type: integer, minimum: 1 }
+        size: { type: integer, format: int64 }
+        request: { $ref: '#/components/schemas/PresignedRequest' }
+    PartRequest:
+      type: object
+      properties:
+        sha256: { type: string, contentEncoding: base64, description: Base64 SHA-256 of the part. }
+    UploadSessionStatus:
+      type: string
+      enum: [OPEN, COMPLETED, ABORTED, EXPIRED]
+    Upload:
+      type: object
+      required: [uploadId, objectId, versionId, mode, status, size, partSize, partCount, expiresAt]
+      properties:
+        uploadId: { type: string, format: uuid }
+        objectId: { type: string, format: uuid }
+        versionId: { type: string, format: uuid }
+        mode:
+          type: string
+          enum: [SIMPLE, MULTIPART]
+          description: '`SIMPLE`: PUT the whole body to `putUrl`. `MULTIPART`: PUT each part to its `parts[].request`.'
+        status: { $ref: '#/components/schemas/UploadSessionStatus' }
+        size: { type: integer, format: int64 }
+        partSize: { type: integer, format: int64 }
+        partCount: { type: integer }
+        expiresAt: { type: string, format: date-time }
+        parts:
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/PartTarget' }
+        putUrl:
+          oneOf:
+            - $ref: '#/components/schemas/PresignedRequest'
+            - type: 'null'
+    ReceivedPart:
+      type: object
+      required: [partNumber, size, etag]
+      properties:
+        partNumber: { type: integer }
+        size: { type: integer, format: int64 }
+        etag: { type: string }
+    UploadStatus:
+      type: object
+      required: [uploadId, objectId, versionId, status, size, partSize, partCount, expiresAt, received, missing]
+      properties:
+        uploadId: { type: string, format: uuid }
+        objectId: { type: string, format: uuid }
+        versionId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/UploadSessionStatus' }
+        size: { type: integer, format: int64 }
+        partSize: { type: integer, format: int64 }
+        partCount: { type: integer }
+        expiresAt: { type: string, format: date-time }
+        received: { type: array, items: { $ref: '#/components/schemas/ReceivedPart' } }
+        missing: { type: array, items: { type: integer }, description: Part numbers still to send. }
+    CompleteUpload:
+      type: object
+      properties:
+        parts:
+          type: array
+          description: Multipart only. The ETag storage returned for each part.
+          items:
+            type: object
+            required: [partNumber, etag]
+            properties:
+              partNumber: { type: integer, minimum: 1 }
+              etag: { type: string }
+        sha256:
+          allOf: [{ $ref: '#/components/schemas/Sha256Hex' }]
+          description: Overrides the checksum declared at create.
+    ObjectResult:
+      type: object
+      required: [objectId, versionId, status, filename, size]
+      properties:
+        objectId: { type: string, format: uuid }
+        versionId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/VersionStatus' }
+        filename: { type: string }
+        contentType: { type: [string, 'null'] }
+        size: { type: integer, format: int64 }
+        sha256: { type: [string, 'null'] }
+
+    # -------------------------------------------------------------- objects and versions
+    Version:
+      type: object
+      required: [versionId, versionNo, status, filename, size, current, deleteMarker, createdAt]
+      properties:
+        versionId: { type: string, format: uuid }
+        versionNo: { type: integer, minimum: 1 }
+        status: { $ref: '#/components/schemas/VersionStatus' }
+        filename: { type: string }
+        contentType: { type: [string, 'null'] }
+        size: { type: integer, format: int64 }
+        sha256: { type: [string, 'null'] }
+        current: { type: boolean }
+        deleteMarker: { type: boolean }
+        createdAt: { type: string, format: date-time }
+    Object:
+      type: object
+      required: [objectId, namespace, status, createdAt, updatedAt]
+      properties:
+        objectId: { type: string, format: uuid }
+        namespace: { $ref: '#/components/schemas/NamespaceName' }
+        externalRef: { type: [string, 'null'] }
+        status: { type: string, enum: [ACTIVE, DELETED] }
+        currentVersionId: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        latest:
+          description: Newest non-purged version (may be a delete marker); null in list results.
+          oneOf:
+            - $ref: '#/components/schemas/Version'
+            - type: 'null'
+    RestoreResult:
+      type: object
+      required: [objectId, versionId, restoredFrom]
+      properties:
+        objectId: { type: string, format: uuid }
+        versionId: { type: string, format: uuid, description: The new current version. }
+        restoredFrom: { type: string, format: uuid }
+    CopyRequest:
+      type: object
+      properties:
+        namespace:
+          allOf: [{ $ref: '#/components/schemas/NamespaceName' }]
+          default: default
+        externalRef: { type: string }
+    CopyResult:
+      type: object
+      required: [objectId, versionId]
+      properties:
+        objectId: { type: string, format: uuid }
+        versionId: { type: string, format: uuid }
+    Tags:
+      type: object
+      maxProperties: 20
+      propertyNames: { pattern: '^[A-Za-z0-9_.-]{1,64}$' }
+      additionalProperties: { type: string, maxLength: 256 }
+    TagBody:
+      type: object
+      required: [tags]
+      properties:
+        tags: { $ref: '#/components/schemas/Tags' }
+
+    # -------------------------------------------------------------- search and progress
+    SearchHit:
+      type: object
+      required: [objectId, versionId, namespace, filename, size, status, createdAt, updatedAt, tags]
+      properties:
+        tenantId: { type: string, format: uuid }
+        objectId: { type: string, format: uuid }
+        versionId: { type: string, format: uuid }
+        namespace: { $ref: '#/components/schemas/NamespaceName' }
+        externalRef: { type: [string, 'null'] }
+        filename: { type: string }
+        contentType: { type: [string, 'null'] }
+        size: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/VersionStatus' }
+        sha256: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        tags: { $ref: '#/components/schemas/Tags' }
+    SearchResults:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/SearchHit' } }
+        nextCursor:
+          type: [string, 'null']
+          description: Pass as `cursor` for the next page; null on the last page.
+    Progress:
+      type: object
+      required: [objectId, versionId, status, phase, percent, bytesDone, bytesTotal, terminal]
+      properties:
+        objectId: { type: string, format: uuid }
+        versionId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/VersionStatus' }
+        phase:
+          type: string
+          enum: [UPLOAD, VERIFY, DONE, FAILED]
+          description: UPLOAD 0–49%, VERIFY 50–99%, DONE 100%. FAILED keeps the raw status.
+        percent: { type: integer, minimum: 0, maximum: 100 }
+        bytesDone: { type: integer, format: int64 }
+        bytesTotal: { type: integer, format: int64 }
+        terminal: { type: boolean, description: No further changes will follow. }
+
+    # -------------------------------------------------------------- lifecycle and webhooks
+    LifecycleFilter:
+      type: object
+      description: All conditions must hold. Unknown keys are ignored.
+      properties:
+        current: { type: boolean, description: Only current (true) or only non-current (false) versions. }
+        contentTypePrefix: { type: string, examples: ['video/'] }
+        externalRefPrefix: { type: string }
+        minSize: { type: integer, format: int64 }
+        maxSize: { type: integer, format: int64 }
+        olderThanDays: { type: integer, minimum: 0 }
+      additionalProperties: true
+    LifecycleAction:
+      oneOf:
+        - $ref: '#/components/schemas/LifecycleTransition'
+        - $ref: '#/components/schemas/LifecycleExpire'
+        - $ref: '#/components/schemas/LifecycleExpireNonCurrent'
+      discriminator:
+        propertyName: type
+        mapping:
+          transition: '#/components/schemas/LifecycleTransition'
+          expire: '#/components/schemas/LifecycleExpire'
+          expireNonCurrent: '#/components/schemas/LifecycleExpireNonCurrent'
+    LifecycleTransition:
+      type: object
+      description: Move matching versions to another storage tier.
+      required: [type, tier]
+      properties:
+        type: { type: string, const: transition }
+        tier: { $ref: '#/components/schemas/Tier' }
+    LifecycleExpire:
+      type: object
+      description: Delete matching objects (soft delete; they can be undeleted until purged).
+      required: [type]
+      properties:
+        type: { type: string, const: expire }
+    LifecycleExpireNonCurrent:
+      type: object
+      description: Purge non-current versions of matching objects.
+      required: [type]
+      properties:
+        type: { type: string, const: expireNonCurrent }
+      additionalProperties: true
+    LifecycleRuleBody:
+      type: object
+      required: [name, actions]
+      properties:
+        name: { type: string, minLength: 1 }
+        filter: { $ref: '#/components/schemas/LifecycleFilter' }
+        actions:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/LifecycleAction' }
+    LifecycleRule:
+      type: object
+      required: [id, name, enabled, filter, actions]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        enabled: { type: boolean }
+        filter: { $ref: '#/components/schemas/LifecycleFilter' }
+        actions: { type: array, items: { $ref: '#/components/schemas/LifecycleAction' } }
+    LifecyclePreview:
+      type: object
+      required: [matched, bytes]
+      properties:
+        matched: { type: integer, description: Versions the rule would act on. }
+        bytes: { type: integer, format: int64 }
+    EnabledBody:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+    WebhookEvent:
+      type: string
+      examples: [object.ready, object.corrupted, object.copied, object.deleted, object.updated, object.lifecycle, object.purged]
+    WebhookBody:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, format: uri, description: Public HTTPS endpoint. }
+        events:
+          type: array
+          default: [object.ready, object.corrupted]
+          items: { $ref: '#/components/schemas/WebhookEvent' }
+    Webhook:
+      type: object
+      required: [id, url, enabled, events, failureCount]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        enabled: { type: boolean }
+        events: { type: array, items: { $ref: '#/components/schemas/WebhookEvent' } }
+        failureCount: { type: integer, description: Consecutive failed deliveries. }
+    CreatedWebhook:
+      type: object
+      required: [id, url, secret, events]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        secret:
+          type: string
+          pattern: '^whsec_[A-Za-z0-9_-]{32}$'
+          description: Signing secret, shown only here.
+        events: { type: array, items: { $ref: '#/components/schemas/WebhookEvent' } }
+
+    # -------------------------------------------------------------- usage
+    UsageReport:
+      type: object
+      required: [plan, storage, month, daily]
+      properties:
+        plan: { $ref: '#/components/schemas/PlanName' }
+        storage:
+          type: object
+          required: [storedBytes, reservedBytes, objectCount, limitBytes]
+          properties:
+            storedBytes: { type: integer, format: int64 }
+            reservedBytes: { type: integer, format: int64, description: Held by uploads in progress. }
+            objectCount: { type: integer, format: int64 }
+            limitBytes: { type: integer, format: int64 }
+        month:
+          type: object
+          description: Current calendar month (UTC).
+          required: [egressBytes, requests]
+          properties:
+            egressBytes: { type: integer, format: int64 }
+            requests: { type: integer, format: int64 }
+            egressLimitBytes: { type: [integer, 'null'], format: int64 }
+        daily:
+          type: array
+          description: Last 30 days, oldest first.
+          items:
+            type: object
+            required: [day, storedBytes, egressBytes, requests, objectCount, versionCount]
+            properties:
+              day: { type: string, format: date }
+              storedBytes: { type: integer, format: int64 }
+              egressBytes: { type: integer, format: int64 }
+              requests: { type: integer, format: int64 }
+              objectCount: { type: integer, format: int64 }
+              versionCount: { type: integer, format: int64 }
+
+    # -------------------------------------------------------------- operator
+    PlanQuotas:
+      type: object
+      additionalProperties: true
+      properties:
+        maxStorageBytes: { type: integer, format: int64 }
+        maxObjectBytes: { type: integer, format: int64 }
+        activeUploads: { type: integer }
+        maxEgressBytesPerMonth: { type: integer, format: int64 }
+    Plan:
+      type: object
+      required: [name, quotas]
+      properties:
+        name: { $ref: '#/components/schemas/PlanName' }
+        quotas:
+          type: string
+          contentMediaType: application/json
+          description: The quotas as a JSON-encoded string (see `PlanQuotas`).
+    OperatorCreateTenant:
+      type: object
+      required: [slug]
+      properties:
+        slug: { $ref: '#/components/schemas/TenantSlug' }
+        name: { type: string, description: Defaults to the slug. }
+        plan:
+          allOf: [{ $ref: '#/components/schemas/PlanName' }]
+          default: free
+    OperatorTenant:
+      type: object
+      required: [id, slug, status, plan, storedBytes, objectCount]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { $ref: '#/components/schemas/TenantSlug' }
+        status: { $ref: '#/components/schemas/TenantStatus' }
+        plan: { $ref: '#/components/schemas/PlanName' }
+        storedBytes: { type: integer, format: int64 }
+        objectCount: { type: integer, format: int64 }
+    BillingRow:
+      type: object
+      required: [tenant, day, storedBytes, egressBytes, requests]
+      properties:
+        tenant: { $ref: '#/components/schemas/TenantSlug' }
+        day: { type: string, format: date }
+        storedBytes: { type: integer, format: int64 }
+        egressBytes: { type: integer, format: int64 }
+        requests: { type: integer, format: int64 }
+    IntegrityIssue:
+      type: object
+      required: [tenant, versionId, status, error, objectId]
+      properties:
+        tenant: { $ref: '#/components/schemas/TenantSlug' }
+        objectId: { type: string, format: uuid }
+        versionId: { type: string, format: uuid }
+        status: { type: string, enum: [CORRUPT, MISSING, FAILED] }
+        error: { type: string, description: Empty when no detail was recorded. }
+    UsageDrift:
+      type: object
+      required: [tenantId, field, recorded, actual]
+      properties:
+        tenantId: { type: string, format: uuid }
+        field: { type: string }
+        recorded: { type: integer, format: int64 }
+        actual: { type: integer, format: int64 }
+    DeadLetter:
+      type: object
+      required: [id, eventType, error, at]
+      properties:
+        id: { type: string, format: uuid }
+        eventType: { type: string }
+        error: { type: string }
+        at: { type: string, format: date-time }
+
+    # -------------------------------------------------------------- typed envelopes
+    SignupResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/SignupResult' } } }]
+    MessageResponse:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - properties:
+            data: { type: object, required: [message], properties: { message: { type: string } } }
+    FirstLoginResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/FirstLogin' } } }]
+    OnboardingResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/OnboardingStep' } } } }]
+    WhoAmIResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/WhoAmI' } } }]
+    ApiKeyListResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/ApiKey' } } } }]
+    CreatedApiKeyResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/CreatedApiKey' } } }]
+    NamespaceResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/Namespace' } } }]
+    NamespaceListResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/Namespace' } } } }]
+    UploadResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/Upload' } } }]
+    UploadStatusResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/UploadStatus' } } }]
+    PartTargetResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/PartTarget' } } }]
+    ObjectResultResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/ObjectResult' } } }]
+    ObjectResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/Object' } } }]
+    ObjectListResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/Object' } } } }]
+    VersionListResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/Version' } } } }]
+    RestoreResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/RestoreResult' } } }]
+    CopyResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/CopyResult' } } }]
+    TagsResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/Tags' } } }]
+    SearchResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/SearchResults' } } }]
+    ProgressResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/Progress' } } }]
+    LifecycleRuleResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/LifecycleRule' } } }]
+    LifecycleRuleListResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/LifecycleRule' } } } }]
+    LifecyclePreviewResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/LifecyclePreview' } } }]
+    WebhookListResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/Webhook' } } } }]
+    CreatedWebhookResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/CreatedWebhook' } } }]
+    UsageResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/UsageReport' } } }]
+    IdResponse:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - properties:
+            data: { type: object, required: [id], properties: { id: { type: string, format: uuid } } }
+    OperatorTenantListResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/OperatorTenant' } } } }]
+    PlanListResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/Plan' } } } }]
+    BillingResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/BillingRow' } } } }]
+    IntegrityResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/IntegrityIssue' } } } }]
+    ReconcileResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/UsageDrift' } } } }]
+    DeadLetterResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/DeadLetter' } } } }]

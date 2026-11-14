@@ -1,0 +1,39 @@
+# Jenkins pod agent for the Console: Node 24 (Angular 22 needs ^22.22.3 or ^24.15) to type-check,
+# test and build, and kaniko to publish the bundle image. Small requests so it schedules on the
+# busy cluster; limits let the build burst.
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: jnlp
+      image: jenkins/inbound-agent:latest-jdk21
+      imagePullPolicy: IfNotPresent
+      resources:
+        requests: { cpu: 50m, memory: 256Mi, ephemeral-storage: 256Mi }
+        limits: { cpu: 500m, memory: 512Mi, ephemeral-storage: 1Gi }
+    - name: node
+      image: node:24-bookworm
+      imagePullPolicy: IfNotPresent
+      command: ["cat"]
+      tty: true
+      resources:
+        requests: { cpu: 250m, memory: 1Gi, ephemeral-storage: 1Gi }
+        limits: { cpu: "2", memory: 3Gi, ephemeral-storage: 4Gi }
+    - name: kaniko
+      image: gcr.io/kaniko-project/executor:v1.23.2-debug
+      imagePullPolicy: IfNotPresent
+      command: ["/busybox/cat"]
+      tty: true
+      volumeMounts:
+        - name: docker-credentials
+          mountPath: /kaniko/.docker
+      resources:
+        requests: { cpu: 100m, memory: 256Mi, ephemeral-storage: 512Mi }
+        limits: { cpu: "1", memory: 1Gi, ephemeral-storage: 2Gi }
+  volumes:
+    - name: docker-credentials
+      secret:
+        secretName: docker-credentials
+        items:
+          - key: .dockerconfigjson
+            path: config.json

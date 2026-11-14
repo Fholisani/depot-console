@@ -1,0 +1,7 @@
+{
+  "apiBase": "/depot",
+  "auth": {
+    "authority": "https://fmash.online/auth/realms/depot",
+    "clientId": "depot-console"
+  }
+}

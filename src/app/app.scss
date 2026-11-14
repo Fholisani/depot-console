@@ -1,0 +1,19 @@
+.passive-banner {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  padding: 0.5rem 1rem;
+  background: #8a4b00;
+  color: #fff;
+  font-size: 0.9rem;
+
+  button {
+    margin-left: 1rem;
+    color: inherit;
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    padding: 0.1rem 0.6rem;
+    cursor: pointer;
+  }
+}
