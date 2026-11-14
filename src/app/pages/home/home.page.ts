@@ -24,7 +24,7 @@ import { map } from 'rxjs';
         </p>
       </ion-text>
       @if (signedIn()) {
-        <ion-button routerLink="/dashboard">Go to your dashboard</ion-button>
+        <ion-button routerLink="/app">Go to your dashboard</ion-button>
       } @else {
         <ion-button routerLink="/signup">Create an account</ion-button>
         <ion-button fill="outline" (click)="signIn()">Sign in</ion-button>

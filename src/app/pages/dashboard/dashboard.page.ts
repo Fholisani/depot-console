@@ -1,115 +1,119 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
+import { Component, computed, inject, OnInit, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import {
-  IonButton, IonButtons, IonCard, IonCardContent, IonCardHeader, IonCardTitle, IonCheckbox,
-  IonContent, IonHeader, IonItem, IonLabel, IonList, IonNote, IonSpinner, IonText, IonTitle,
-  IonToolbar,
+  IonButton, IonCard, IonCardContent, IonCardHeader, IonCardTitle, IonCheckbox, IonItem, IonLabel,
+  IonList, IonNote, IonProgressBar, IonSpinner, IonText,
 } from '@ionic/angular';
-import { OidcSecurityService } from 'angular-auth-oidc-client';
 import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
-import type { FirstLogin, OnboardingStep } from '../../core/api/models';
-
-/** What the page shows when the tenant cannot be loaded, by the contract's error reason. */
-const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
-  EMAIL_NOT_VERIFIED: 'Verify your email address using the link we sent, then sign in again.',
-  TENANT_NOT_RESOLVED: 'Your account is not part of a tenant yet. Sign up to create one.',
-  TENANT_SUSPENDED: 'This tenant is suspended or being deleted. Contact support.',
-  TENANT_SELECTION_REQUIRED: 'You belong to several tenants; choose one to continue.',
-  NETWORK_ERROR: 'Depot could not be reached. Check your connection and try again.',
-};
+import type { OnboardingStep, UsageReport } from '../../core/api/models';
+import { SessionService } from '../../core/tenant/session.service';
+import { describeError, formatBytes } from '../../core/ui/format';
 
 /**
- * Signed-in home. Calling `GET /v1/tenant` here completes first-login activation; on that call the
- * response carries a read-write API key, which is shown exactly once.
+ * Signed-in home: the first-login API key (shown once), the getting-started checklist and the
+ * plan's storage and download usage.
  */
 @Component({
   selector: 'app-dashboard',
   imports: [
-    IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent, IonCard, IonCardHeader,
-    IonCardTitle, IonCardContent, IonList, IonItem, IonLabel, IonCheckbox, IonNote, IonText, IonSpinner,
+    RouterLink, IonButton, IonCard, IonCardHeader, IonCardTitle, IonCardContent, IonList, IonItem,
+    IonLabel, IonCheckbox, IonNote, IonText, IonSpinner, IonProgressBar,
   ],
   template: `
-    <ion-header>
-      <ion-toolbar>
-        <ion-title>{{ tenant()?.tenant?.name ?? 'Depot' }}</ion-title>
-        <ion-buttons slot="end"><ion-button (click)="signOut()">Sign out</ion-button></ion-buttons>
-      </ion-toolbar>
-    </ion-header>
-    <ion-content class="ion-padding">
-      @if (loading()) {
-        <ion-spinner name="crescent" aria-label="Loading" />
-      } @else if (problem()) {
-        <ion-text color="danger"><p role="alert">{{ problem() }}</p></ion-text>
-        <ion-button fill="outline" (click)="load()">Try again</ion-button>
-      } @else if (tenant(); as t) {
-        @if (t.apiKey) {
-          <ion-card color="warning">
-            <ion-card-header><ion-card-title>Your first API key</ion-card-title></ion-card-header>
-            <ion-card-content>
-              <p>Copy it now. It is shown only once and cannot be recovered.</p>
-              <code class="secret">{{ t.apiKey }}</code>
-              <ion-button size="small" (click)="copy(t.apiKey!)">{{ copied() ? 'Copied' : 'Copy' }}</ion-button>
-            </ion-card-content>
-          </ion-card>
-        }
-        <p>
-          Tenant <strong>{{ t.tenant.slug }}</strong> · plan {{ t.tenant.plan }} · your role
-          {{ t.tenant.role.toLowerCase() }}
-        </p>
-        <h2>Getting started</h2>
-        <ion-list>
-          @for (step of steps(); track step.id) {
-            <ion-item>
-              <ion-checkbox slot="start" [checked]="step.done" disabled aria-hidden="true" />
-              <ion-label>{{ step.title }}</ion-label>
-              @if (step.done) { <ion-note slot="end">Done</ion-note> }
-            </ion-item>
+    @if (session.firstKey(); as key) {
+      <ion-card color="warning">
+        <ion-card-header><ion-card-title>Your first API key</ion-card-title></ion-card-header>
+        <ion-card-content>
+          <p>Copy it now. It is shown only once and cannot be recovered.</p>
+          <code class="secret">{{ key }}</code>
+          <ion-button size="small" (click)="copy(key)">{{ copied() ? 'Copied' : 'Copy' }}</ion-button>
+          <ion-button size="small" fill="outline" (click)="session.dismissKey()">I have saved it</ion-button>
+        </ion-card-content>
+      </ion-card>
+    }
+
+    <p>
+      Tenant <strong>{{ session.tenant()?.slug }}</strong> · plan {{ session.tenant()?.plan }} ·
+      your role {{ session.tenant()?.role?.toLowerCase() }}
+    </p>
+
+    <ion-card>
+      <ion-card-header><ion-card-title>Usage</ion-card-title></ion-card-header>
+      <ion-card-content>
+        @if (usageProblem()) {
+          <ion-text color="danger"><p role="alert">{{ usageProblem() }}</p></ion-text>
+        } @else if (usage(); as u) {
+          <div class="meter">
+            <span>Storage: {{ bytes(u.storage.storedBytes) }} of {{ bytes(u.storage.limitBytes) }}
+              ({{ u.storage.objectCount }} files)</span>
+            <ion-progress-bar [value]="storageShare()" [color]="storageShare() > 0.9 ? 'danger' : 'primary'"
+              aria-label="Storage used" />
+          </div>
+          <div class="meter">
+            <span>Downloads this month: {{ bytes(u.month.egressBytes) }}
+              @if (u.month.egressLimitBytes) { of {{ bytes(u.month.egressLimitBytes) }} }
+              · {{ u.month.requests }} requests</span>
+            @if (u.month.egressLimitBytes) {
+              <ion-progress-bar [value]="egressShare()" [color]="egressShare() > 0.9 ? 'danger' : 'primary'"
+                aria-label="Downloads used" />
+            }
+          </div>
+          @if (u.storage.reservedBytes > 0) {
+            <ion-note>{{ bytes(u.storage.reservedBytes) }} is held by uploads in progress.</ion-note>
           }
-        </ion-list>
+        } @else {
+          <ion-spinner name="crescent" aria-label="Loading usage" />
+        }
+      </ion-card-content>
+    </ion-card>
+
+    <h2>Getting started</h2>
+    <ion-list>
+      @for (step of steps(); track step.id) {
+        <ion-item>
+          <ion-checkbox slot="start" [checked]="step.done" disabled aria-hidden="true" />
+          <ion-label>{{ step.title }}</ion-label>
+          @if (step.done) { <ion-note slot="end">Done</ion-note> }
+        </ion-item>
       }
-    </ion-content>
+    </ion-list>
+    <ion-button routerLink="/app/files">Open files</ion-button>
   `,
-  styles: [`.secret { display: block; word-break: break-all; margin: 0.5rem 0; font-size: 0.95rem; }`],
+  styles: [`
+    .secret { display: block; word-break: break-all; margin: 0.5rem 0; font-size: 0.95rem; }
+    .meter { margin-bottom: 1rem; display: grid; gap: 0.35rem; }
+  `],
 })
 export class DashboardPage implements OnInit {
   private readonly api = inject(DepotApi);
-  private readonly oidc = inject(OidcSecurityService);
+  protected readonly session = inject(SessionService);
 
-  protected readonly loading = signal(true);
-  protected readonly problem = signal<string | null>(null);
-  protected readonly tenant = signal<FirstLogin | null>(null);
   protected readonly steps = signal<OnboardingStep[]>([]);
+  protected readonly usage = signal<UsageReport | null>(null);
+  protected readonly usageProblem = signal<string | null>(null);
   protected readonly copied = signal(false);
+  protected readonly bytes = formatBytes;
+
+  protected readonly storageShare = computed(() => {
+    const s = this.usage()?.storage;
+    return s && s.limitBytes > 0 ? Math.min(1, (s.storedBytes + s.reservedBytes) / s.limitBytes) : 0;
+  });
+  protected readonly egressShare = computed(() => {
+    const m = this.usage()?.month;
+    return m?.egressLimitBytes ? Math.min(1, m.egressBytes / m.egressLimitBytes) : 0;
+  });
 
   ngOnInit(): void {
-    this.load();
-  }
-
-  load(): void {
-    this.loading.set(true);
-    this.problem.set(null);
-    this.api.tenant().subscribe({
-      next: (t) => {
-        this.tenant.set(t);
-        this.api.onboarding().subscribe({
-          next: (s) => this.steps.set(s),
-          error: () => this.steps.set([]),
-        });
-        this.loading.set(false);
-      },
-      error: (e: ApiError) => {
-        this.problem.set(PROBLEMS[e.reason] ?? `${e.message}${e.requestId ? ` (request ${e.requestId})` : ''}`);
-        this.loading.set(false);
-      },
+    this.api.onboarding().subscribe({ next: (s) => this.steps.set(s), error: () => this.steps.set([]) });
+    this.api.usage().subscribe({
+      next: (u) => this.usage.set(u),
+      error: (e: ApiError) => this.usageProblem.set(describeError(e)),
     });
   }
 
   async copy(value: string): Promise<void> {
     await navigator.clipboard.writeText(value);
     this.copied.set(true);
-  }
-
-  signOut(): void {
-    this.oidc.logoff().subscribe();
   }
 }

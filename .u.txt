@@ -1,0 +1,158 @@
+{"data":null,"errors":[{"code":3001,"message":"A valid email address is required","reason":"VALIDATION_ERROR","field":"email","requestId":"2505e8ce196cec319b4fb22b166aec46"}],"message":"VALIDATION_ERROR"} [400]
+ page 200116 /v1/signup:
+117 post:
+119 operationId: signUp
+155 /v1/signup/resend:
+156 post:
+158 operationId: resendVerification
+185 /v1/tenant:
+186 get:
+188 operationId: getCurrentTenant
+222 /v1/tenant/onboarding:
+223 get:
+225 operationId: getOnboarding
+240 /v1/me:
+241 get:
+243 operationId: whoAmI
+264 /v1/api-keys:
+265 get:
+267 operationId: listApiKeys
+283 post:
+285 operationId: createApiKey
+310 /v1/api-keys/{id}:
+311 delete:
+313 operationId: revokeApiKey
+331 /v1/namespaces:
+332 get:
+334 operationId: listNamespaces
+348 post:
+350 operationId: createNamespace
+377 /v1/namespaces/{name}:
+384 get:
+386 operationId: getNamespace
+398 put:
+400 operationId: updateNamespace
+419 delete:
+421 operationId: deleteNamespace
+436 /v1/uploads:
+437 post:
+439 operationId: createUpload
+480 /v1/uploads/{id}:
+484 get:
+486 operationId: getUploadStatus
+500 delete:
+502 operationId: abortUpload
+511 /v1/uploads/{id}/parts/{partNumber}:
+512 post:
+514 operationId: getPartTarget
+543 /v1/uploads/{id}/complete:
+544 post:
+546 operationId: completeUpload
+579 /v1/objects:
+580 get:
+582 operationId: findObjectsByExternalRef
+605 put:
+607 operationId: uploadObject
+659 /v1/objects/{id}:
+663 get:
+665 operationId: getObject
+678 delete:
+680 operationId: deleteObject
+694 /v1/objects/{id}/versions:
+695 get:
+697 operationId: listVersions
+714 /v1/objects/{id}/content:
+715 get:
+717 operationId: downloadObject
+756 /v1/objects/{id}/undelete:
+757 post:
+759 operationId: undeleteObject
+776 /v1/objects/{id}/versions/{versionId}:
+777 delete:
+779 operationId: purgeVersion
+791 /v1/objects/{id}/versions/{versionId}/restore:
+792 post:
+794 operationId: restoreVersion
+815 /v1/objects/{id}/tags:
+819 get:
+821 operationId: getTags
+833 put:
+835 operationId: replaceTags
+860 /v1/search:
+861 get:
+863 operationId: searchObjects
+919 /v1/objects/{id}/progress:
+920 get:
+922 operationId: getProgress
+939 /v1/objects/{id}/progress/stream:
+940 get:
+942 operationId: streamProgress
+969 /v1/objects/{id}/copy:
+970 post:
+972 operationId: copyObject
+997 /v1/export/archive:
+998 get:
+1000 operationId: exportArchive
+1025 /v1/export/manifest:
+1026 get:
+1028 operationId: exportManifest
+1052 /v1/namespaces/{namespace}/lifecycle-rules:
+1056 get:
+1058 operationId: listLifecycleRules
+1070 post:
+1072 operationId: createLifecycleRule
+1096 /v1/namespaces/{namespace}/lifecycle-rules/{ruleId}:
+1097 delete:
+1099 operationId: deleteLifecycleRule
+1112 /v1/namespaces/{namespace}/lifecycle-rules/{ruleId}/enabled:
+1113 post:
+1115 operationId: setLifecycleRuleEnabled
+1132 /v1/namespaces/{namespace}/lifecycle-rules/{ruleId}/preview:
+1133 get:
+1135 operationId: previewLifecycleRule
+1154 /v1/namespaces/{namespace}/webhooks:
+1158 get:
+1160 operationId: listWebhooks
+1173 post:
+1175 operationId: createWebhook
+1199 /v1/namespaces/{namespace}/webhooks/{id}:
+1200 delete:
+1202 operationId: deleteWebhook
+1215 /v1/namespaces/{namespace}/webhooks/{id}/enabled:
+1216 post:
+1218 operationId: setWebhookEnabled
+1237 /v1/usage:
+1238 get:
+1240 operationId: getUsage
+1256 /v1/public/{tenant}/{namespace}/{id}:
+1257 get:
+1259 operationId: getPublicContent
+1288 /v1/operator/tenants:
+1289 get:
+1291 operationId: operatorListTenants
+1304 post:
+1306 operationId: operatorCreateTenant
+1327 /v1/operator/tenants/{id}/status:
+1328 post:
+1330 operationId: operatorSetTenantStatus
+1352 /v1/operator/tenants/{id}/plan:
+1353 post:
+1355 operationId: operatorSetTenantPlan
+1376 /v1/operator/plans:
+1377 get:
+1379 operationId: operatorListPlans
+1393 /v1/operator/plans/{name}:
+1394 put:
+1396 operationId: operatorUpsertPlan
+1419 /v1/operator/billing:
+1420 get:
+1422 operationId: operatorBilling
+1448 /v1/operator/integrity:
+1449 get:
+1451 operationId: operatorIntegrity
+1465 /v1/operator/reconcile:
+1466 post:
+1468 operationId: operatorReconcile
+1482 /v1/operator/dead-letters:
+1483 get:
+1485 operationId: operatorDeadLetters
