@@ -54,6 +54,10 @@ export class DepotApi {
     return this.send<SignupResult>('POST', '/v1/signup', body);
   }
 
+  resendVerification(email: string): Observable<void> {
+    return this.send<void>('POST', '/v1/signup/resend', { email });
+  }
+
   // ------------------------------------------------------------------ plumbing
 
   /** Absolute URL of an API path; the interceptor recognises these to attach credentials. */
