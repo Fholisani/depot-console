@@ -22,15 +22,16 @@ import { describeError, formatBytes } from '../../core/ui/format';
   ],
   template: `
     @if (session.firstKey(); as key) {
-      <ion-card color="warning">
-        <ion-card-header><ion-card-title>Your first API key</ion-card-title></ion-card-header>
-        <ion-card-content>
-          <p>Copy it now. It is shown only once and cannot be recovered.</p>
-          <code class="secret">{{ key }}</code>
-          <ion-button size="small" (click)="copy(key)">{{ copied() ? 'Copied' : 'Copy' }}</ion-button>
-          <ion-button size="small" fill="outline" (click)="session.dismissKey()">I have saved it</ion-button>
-        </ion-card-content>
-      </ion-card>
+      <details class="dev">
+        <summary>For developers: connect your own software (optional)</summary>
+        <p>
+          We created an access key so programs can use your storage. You only need it if you write
+          code against Depot. It is shown only now; you can always create a new one under Developers.
+        </p>
+        <code class="secret">{{ key }}</code>
+        <ion-button size="small" (click)="copy(key)">{{ copied() ? 'Copied' : 'Copy key' }}</ion-button>
+        <ion-button size="small" fill="clear" (click)="session.dismissKey()">Hide</ion-button>
+      </details>
     }
 
     <p>
@@ -83,6 +84,9 @@ import { describeError, formatBytes } from '../../core/ui/format';
   styles: [`
     .secret { display: block; word-break: break-all; margin: 0.5rem 0; font-size: 0.95rem; }
     .meter { margin-bottom: 1rem; display: grid; gap: 0.35rem; }
+    .dev { border: 1px solid var(--ion-color-light-shade); border-radius: 8px; padding: 0.5rem 0.75rem;
+      margin-bottom: 1rem; }
+    .dev summary { cursor: pointer; color: var(--ion-color-medium-shade); }
   `],
 })
 export class DashboardPage implements OnInit {
