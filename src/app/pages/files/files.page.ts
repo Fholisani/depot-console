@@ -1,5 +1,5 @@
 import { DatePipe } from '@angular/common';
-import { Component, inject, OnInit, signal } from '@angular/core';
+import { Component, effect, inject, OnInit, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import {
   IonButton, IonItem, IonLabel, IonList, IonNote, IonProgressBar, IonSearchbar, IonSelect,
@@ -12,9 +12,14 @@ import { SessionService } from '../../core/tenant/session.service';
 import { UploadService } from '../../core/upload/upload.service';
 import { describeError, formatBytes } from '../../core/ui/format';
 
+/** Recent uploads survive a reload for the rest of the browser session. */
+const RECENT_KEY = 'depot.recentUploads';
+const RECENT_MAX = 20;
+
 interface UploadJob {
   name: string;
-  file: File;
+  /** Present only in the tab that started the upload; needed to retry. */
+  file?: File;
   target: string;
   percent: number;
   error?: string;
@@ -60,7 +65,9 @@ interface UploadJob {
         <span>{{ job.name }}</span>
         @if (job.error) {
           <ion-text color="danger"><span role="alert">{{ job.error }}</span></ion-text>
-          <ion-button size="small" fill="outline" (click)="retry(job)">Retry</ion-button>
+          @if (job.file) {
+            <ion-button size="small" fill="outline" (click)="retry(job)">Retry</ion-button>
+          }
         } @else if (job.result; as r) {
           <a [routerLink]="['/app/files', r.objectId]">Uploaded · {{ r.status }}</a>
         } @else {
@@ -111,10 +118,29 @@ export class FilesPage implements OnInit {
   protected readonly nextCursor = signal<string | null>(null);
   protected readonly loading = signal(false);
   protected readonly problem = signal<string | null>(null);
-  protected readonly jobs = signal<UploadJob[]>([]);
+  protected readonly jobs = signal<UploadJob[]>(FilesPage.restore());
   protected readonly bytes = formatBytes;
 
   private query = '';
+
+  constructor() {
+    // Finished uploads are remembered (without the File) so the list survives a reload.
+    effect(() => {
+      const done = this.jobs()
+        .filter((j) => j.result || j.error)
+        .slice(0, RECENT_MAX)
+        .map(({ name, target, percent, error, result }) => ({ name, target, percent, error, result }));
+      sessionStorage.setItem(RECENT_KEY, JSON.stringify(done));
+    });
+  }
+
+  private static restore(): UploadJob[] {
+    try {
+      return JSON.parse(sessionStorage.getItem(RECENT_KEY) ?? '[]') as UploadJob[];
+    } catch {
+      return [];
+    }
+  }
 
   ngOnInit(): void {
     this.api.namespaces().subscribe({ next: (n) => this.namespaces.set(n), error: () => undefined });
@@ -138,7 +164,7 @@ export class FilesPage implements OnInit {
     }
   }
 
-  load(reset: boolean): void {
+  load(reset: boolean, attempt = 1): void {
     this.loading.set(true);
     this.problem.set(null);
     this.api.search({
@@ -153,6 +179,11 @@ export class FilesPage implements OnInit {
         this.loading.set(false);
       },
       error: (e: ApiError) => {
+        // Search outages are usually brief: try once more before showing the error.
+        if (attempt === 1 && (e.reason === 'SEARCH_UNAVAILABLE' || e.reason === 'NETWORK_ERROR')) {
+          setTimeout(() => this.load(reset, 2), 2000);
+          return;
+        }
         this.problem.set(describeError(e));
         this.loading.set(false);
       },
@@ -185,8 +216,12 @@ export class FilesPage implements OnInit {
       current = next;
     };
     update({ percent: 0, error: undefined, result: undefined });
+    if (!job.file) {
+      return;
+    }
+    const file = job.file;
     try {
-      const result = await this.uploads.upload(job.target, job.file, (percent) => update({ percent }));
+      const result = await this.uploads.upload(job.target, file, (percent) => update({ percent }));
       update({ result });
     } catch (e) {
       update({ error: `${job.name}: ${describeError(ApiError.from(e))}` });
