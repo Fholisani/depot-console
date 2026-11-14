@@ -5,6 +5,10 @@ export const routes: Routes = [
   // Public pages (no sign-in).
   { path: '', loadComponent: () => import('./pages/home/home.page').then((m) => m.HomePage) },
   { path: 'signup', loadComponent: () => import('./pages/signup/signup.page').then((m) => m.SignupPage) },
+  {
+    path: 'verify-email',
+    loadComponent: () => import('./pages/verify-email/verify-email.page').then((m) => m.VerifyEmailPage),
+  },
   // Signed-in area, inside the shell.
   {
     path: 'app',

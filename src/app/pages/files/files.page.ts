@@ -14,6 +14,8 @@ import { describeError, formatBytes } from '../../core/ui/format';
 
 interface UploadJob {
   name: string;
+  file: File;
+  target: string;
   percent: number;
   error?: string;
   result?: ObjectResult;
@@ -58,6 +60,7 @@ interface UploadJob {
         <span>{{ job.name }}</span>
         @if (job.error) {
           <ion-text color="danger"><span role="alert">{{ job.error }}</span></ion-text>
+          <ion-button size="small" fill="outline" (click)="retry(job)">Retry</ion-button>
         } @else if (job.result; as r) {
           <a [routerLink]="['/app/files', r.objectId]">Uploaded · {{ r.status }}</a>
         } @else {
@@ -161,17 +164,32 @@ export class FilesPage implements OnInit {
     input.value = '';
     const target = this.uploadTarget();
     for (const file of files) {
-      const job: UploadJob = { name: file.name, percent: 0 };
+      const job: UploadJob = { name: file.name, file, target, percent: 0 };
       this.jobs.update((j) => [job, ...j]);
-      const update = (patch: Partial<UploadJob>): void =>
-        this.jobs.update((j) => j.map((x) => (x === job ? Object.assign(job, patch) : x)));
-      try {
-        const result = await this.uploads.upload(target, file, (percent) => update({ percent }));
-        update({ result });
-      } catch (e) {
-        update({ error: `${file.name}: ${describeError(ApiError.from(e))}` });
-      }
+      await this.run(job);
     }
     this.load(true);
+  }
+
+  protected async retry(job: UploadJob): Promise<void> {
+    await this.run(job);
+    this.load(true);
+  }
+
+  private async run(job: UploadJob): Promise<void> {
+    // Replace the entry with a fresh object on every change so the list re-renders.
+    let current = job;
+    const update = (patch: Partial<UploadJob>): void => {
+      const next = { ...current, ...patch };
+      this.jobs.update((j) => j.map((x) => (x === current ? next : x)));
+      current = next;
+    };
+    update({ percent: 0, error: undefined, result: undefined });
+    try {
+      const result = await this.uploads.upload(job.target, job.file, (percent) => update({ percent }));
+      update({ result });
+    } catch (e) {
+      update({ error: `${job.name}: ${describeError(ApiError.from(e))}` });
+    }
   }
 }
