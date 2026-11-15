@@ -9,7 +9,7 @@ import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
 import type { Namespace, ObjectResult, SearchHit } from '../../core/api/models';
 import { SessionService } from '../../core/tenant/session.service';
-import { UploadService } from '../../core/upload/upload.service';
+import { UploadPhase, UploadService } from '../../core/upload/upload.service';
 import { describeError, formatBytes } from '../../core/ui/format';
 
 /** Recent uploads survive a reload for the rest of the browser session. */
@@ -22,6 +22,7 @@ interface UploadJob {
   file?: File;
   target: string;
   percent: number;
+  phase?: UploadPhase;
   error?: string;
   result?: ObjectResult;
 }
@@ -70,7 +71,12 @@ interface UploadJob {
         } @else if (job.result; as r) {
           <a [routerLink]="['/app/files', r.objectId]">Uploaded · {{ r.status }}</a>
         } @else {
-          <ion-progress-bar [value]="job.percent / 100" [attr.aria-label]="'Uploading ' + job.name" />
+          @if (job.phase === 'uploading') {
+            <ion-progress-bar [value]="job.percent / 100" [attr.aria-label]="'Uploading ' + job.name" />
+          } @else {
+            <ion-progress-bar type="indeterminate" [attr.aria-label]="'Uploading ' + job.name" />
+          }
+          <ion-note class="status" aria-live="polite">{{ statusText(job) }}</ion-note>
         }
       </div>
     }
@@ -106,6 +112,7 @@ interface UploadJob {
     .toolbar { display: grid; grid-template-columns: minmax(10rem, 16rem) 1fr; gap: 0.75rem; align-items: center; }
     .upload { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 0.5rem 0; }
     .job { display: grid; gap: 0.25rem; margin: 0.5rem 0; }
+    .status { font-size: 0.85rem; }
     .toolbar.single { grid-template-columns: 1fr; }
     @media (max-width: 40rem) { .toolbar { grid-template-columns: 1fr; } }
   `],
@@ -205,6 +212,19 @@ export class FilesPage implements OnInit {
     this.load(true);
   }
 
+  /** "Preparing…", "Uploading 42% · 120 MB of 284 MB", "Finishing…". */
+  protected statusText(job: UploadJob): string {
+    if (job.phase === 'preparing') {
+      return 'Preparing…';
+    }
+    if (job.phase === 'finishing') {
+      return 'Finishing…';
+    }
+    const size = job.file?.size;
+    const done = size ? ` · ${this.bytes(Math.round((size * job.percent) / 100))} of ${this.bytes(size)}` : '';
+    return `Uploading ${job.percent}%${done}`;
+  }
+
   protected async retry(job: UploadJob): Promise<void> {
     await this.run(job);
     this.load(true);
@@ -218,13 +238,13 @@ export class FilesPage implements OnInit {
       this.jobs.update((j) => j.map((x) => (x === current ? next : x)));
       current = next;
     };
-    update({ percent: 0, error: undefined, result: undefined });
+    update({ percent: 0, phase: 'preparing', error: undefined, result: undefined });
     if (!job.file) {
       return;
     }
     const file = job.file;
     try {
-      const result = await this.uploads.upload(job.target, file, (percent) => update({ percent }));
+      const result = await this.uploads.upload(job.target, file, (p) => update({ percent: p.percent, phase: p.phase }));
       update({ result });
     } catch (e) {
       update({ error: `${job.name}: ${describeError(ApiError.from(e))}` });
