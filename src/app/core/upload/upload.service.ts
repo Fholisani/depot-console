@@ -108,15 +108,22 @@ export class UploadService {
   private async sendParts(
     session: Upload, file: File, report: (part: number, loaded: number) => void,
   ): Promise<{ partNumber: number; etag: string }[]> {
-    const targets = [...(session.parts ?? [])];
+    // The create response may list no presigned parts (the contract allows parts: null); then each
+    // part's target is fetched on demand with POST /v1/uploads/{id}/parts/{n}.
+    const given = new Map((session.parts ?? []).map((p) => [p.partNumber, p] as const));
+    const queue = Array.from({ length: session.partCount }, (_, i) => i + 1);
     const done: { partNumber: number; etag: string }[] = [];
     const worker = async (): Promise<void> => {
-      for (let t = targets.shift(); t; t = targets.shift()) {
-        const etag = await this.sendPart(session, file, t, report);
-        done.push({ partNumber: t.partNumber, etag });
+      for (let n = queue.shift(); n !== undefined; n = queue.shift()) {
+        const target = given.get(n) ?? await firstValueFrom(this.api.partTarget(session.uploadId, n));
+        const etag = await this.sendPart(session, file, target, report);
+        done.push({ partNumber: n, etag });
       }
     };
     await Promise.all(Array.from({ length: PART_CONCURRENCY }, worker));
+    if (done.length !== session.partCount) {
+      throw new ApiError(0, 'UNKNOWN', `Only ${done.length} of ${session.partCount} parts were sent.`);
+    }
     return done.sort((a, b) => a.partNumber - b.partNumber);
   }
 
