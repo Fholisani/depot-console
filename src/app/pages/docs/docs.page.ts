@@ -209,6 +209,69 @@ curl -s -X POST "$DEPOT/v1/objects/28d08f7a-cb15-4536-8059-812b59ecb4d1/undelete
   -H "Authorization: Bearer $KEY"            # 200 with the restored file`,
     },
     {
+      id: 'view',
+      title: 'Show a photo or play a video',
+      intro: 'Returns the kind of file (image, video, audio, pdf or other) and a short-lived link you can '
+        + 'put straight into an img or video tag. Seeking in videos works. For other files url is null: offer a download.',
+      request: `curl -s "$DEPOT/v1/objects/28d08f7a-cb15-4536-8059-812b59ecb4d1/view" \\
+  -H "Authorization: Bearer $KEY"`,
+      response: `{
+  "data": {
+    "objectId": "28d08f7a-cb15-4536-8059-812b59ecb4d1",
+    "versionId": "9beb39c1-279f-442a-b092-d25645d0309f",
+    "filename": "holiday.mp4",
+    "contentType": "video/mp4",
+    "kind": "video",
+    "size": 734003200,
+    "url": "https://s3-fmash.xyz/…",
+    "expiresAt": "2026-11-15T09:15:00Z"
+  },
+  "errors": [], "message": null
+}`,
+      after: 'The kind is worked out from the file extension when the stored type is generic. '
+        + 'The link counts against the monthly download allowance.',
+    },
+    {
+      id: 'thumbnail',
+      title: 'Small preview of a photo',
+      intro: 'A link to a small JPEG (longest side 480 px) for galleries. It is made the first time you ask. '
+        + 'JPEG, PNG, GIF and BMP photos have one; any other file answers 404, so show a plain tile.',
+      request: `curl -s "$DEPOT/v1/objects/28d08f7a-cb15-4536-8059-812b59ecb4d1/thumbnail" \\
+  -H "Authorization: Bearer $KEY"`,
+      response: `{ "data": { "url": "https://s3-fmash.xyz/…", "expiresAt": "2026-11-15T09:15:00Z" }, "errors": [], "message": null }`,
+      after: 'Previews are small and do not count against your download allowance.',
+    },
+    {
+      id: 'share',
+      title: 'Share a file with a link',
+      intro: 'Anyone with the link can see and download the file, with no account. Add a note and choose how '
+        + 'long it works (expiresInDays, 1 to 3650; leave it out for no end date). Downloads count against your allowance.',
+      request: `# Create
+curl -s -X POST "$DEPOT/v1/objects/28d08f7a-cb15-4536-8059-812b59ecb4d1/shares" \\
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \\
+  -d '{"description": "Our trip to the coast", "expiresInDays": 7}'
+
+# What a visitor sees (no key needed)
+curl -s "$DEPOT/v1/share/<token>"
+
+# The file itself (no key needed)
+curl -sL "$DEPOT/v1/share/<token>/content?download=true" -o holiday.mp4
+
+# Your active links, and stop sharing
+curl -s "$DEPOT/v1/shares" -H "Authorization: Bearer $KEY"
+curl -s -X DELETE "$DEPOT/v1/shares/<shareId>" -H "Authorization: Bearer $KEY"   # 204`,
+      response: `{
+  "data": {
+    "id": "6f1c…", "objectId": "28d08f7a-…", "filename": "holiday.mp4",
+    "token": "k3J9…", "description": "Our trip to the coast",
+    "createdAt": "2026-11-15T08:00:00Z", "expiresAt": "2026-11-22T08:00:00Z", "downloads": 0
+  },
+  "errors": [], "message": null
+}`,
+      after: 'Give people the Console link https://…/depot-console/s/<token>, which shows a preview and a '
+        + 'Download button. Revoked, expired and unknown links all answer 404.',
+    },
+    {
       id: 'large',
       title: 'Large files',
       intro: 'For files over 64 MB, start an upload session. Depot replies with one signed request per '
