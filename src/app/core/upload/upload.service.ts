@@ -27,6 +27,14 @@ async function sha256Hex(blob: Blob): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/** SHA-256 of one part as base64, the form the API signs into the part's presigned request. */
+async function sha256Base64(blob: Blob): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
+  let binary = '';
+  digest.forEach((b) => (binary += String.fromCharCode(b)));
+  return btoa(binary);
+}
+
 /**
  * Uploads a file: up to 64 MiB in one request through the API, larger files in parts sent straight
  * to storage with presigned requests (create, send parts, complete). Progress is reported in bytes
@@ -108,15 +116,13 @@ export class UploadService {
   private async sendParts(
     session: Upload, file: File, report: (part: number, loaded: number) => void,
   ): Promise<{ partNumber: number; etag: string }[]> {
-    // The create response may list no presigned parts (the contract allows parts: null); then each
-    // part's target is fetched on demand with POST /v1/uploads/{id}/parts/{n}.
-    const given = new Map((session.parts ?? []).map((p) => [p.partNumber, p] as const));
+    // Each part's presigned request is signed with that part's SHA-256, so storage rejects damaged
+    // bytes. The checksum is computed per slice just before the part is sent (bounded memory).
     const queue = Array.from({ length: session.partCount }, (_, i) => i + 1);
     const done: { partNumber: number; etag: string }[] = [];
     const worker = async (): Promise<void> => {
       for (let n = queue.shift(); n !== undefined; n = queue.shift()) {
-        const target = given.get(n) ?? await firstValueFrom(this.api.partTarget(session.uploadId, n));
-        const etag = await this.sendPart(session, file, target, report);
+        const etag = await this.sendPart(session, file, n, report);
         done.push({ partNumber: n, etag });
       }
     };
@@ -128,26 +134,27 @@ export class UploadService {
   }
 
   private async sendPart(
-    session: Upload, file: File, target: PartTarget, report: (part: number, loaded: number) => void,
+    session: Upload, file: File, partNumber: number, report: (part: number, loaded: number) => void,
   ): Promise<string> {
-    const start = (target.partNumber - 1) * session.partSize;
-    const body = file.slice(start, start + target.size);
-    let current = target;
+    const start = (partNumber - 1) * session.partSize;
+    const body = file.slice(start, Math.min(start + session.partSize, file.size));
+    const sha = await sha256Base64(body);
+    let current: PartTarget = await firstValueFrom(this.api.partTarget(session.uploadId, partNumber, sha));
     for (let attempt = 1; ; attempt++) {
       try {
-        const etag = await this.put(current.request, body, (loaded) => report(target.partNumber, loaded));
+        const etag = await this.put(current.request, body, (loaded) => report(partNumber, loaded));
         if (!etag) {
           throw new ApiError(0, 'UNKNOWN',
             'Storage did not expose the part ETag. Allow the ETag header in the storage CORS rules.');
         }
         return etag;
       } catch (e) {
-        report(target.partNumber, 0);           // this part starts again from zero
+        report(partNumber, 0);                  // this part starts again from zero
         if (e instanceof ApiError || attempt >= PART_ATTEMPTS) {
           throw e;
         }
         // The presigned URL may have expired; ask for a fresh one and try again.
-        current = await firstValueFrom(this.api.partTarget(session.uploadId, target.partNumber));
+        current = await firstValueFrom(this.api.partTarget(session.uploadId, partNumber, sha));
       }
     }
   }

@@ -221,8 +221,9 @@ export class DepotApi {
     return this.get<UploadStatus>(`/v1/uploads/${id}`);
   }
 
-  partTarget(id: string, partNumber: number): Observable<PartTarget> {
-    return this.send<PartTarget>('POST', `/v1/uploads/${id}/parts/${partNumber}`, {});
+  /** A presigned request for one part, signed with the part's base64 SHA-256 (the API requires it). */
+  partTarget(id: string, partNumber: number, sha256Base64: string): Observable<PartTarget> {
+    return this.send<PartTarget>('POST', `/v1/uploads/${id}/parts/${partNumber}`, { sha256: sha256Base64 });
   }
 
   completeUpload(id: string, body: CompleteUpload): Observable<ObjectResult> {
