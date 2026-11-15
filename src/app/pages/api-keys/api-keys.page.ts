@@ -35,8 +35,8 @@ import { describeError } from '../../core/ui/format';
         <summary>More options</summary>
         <form [formGroup]="form">
           <ion-item lines="none"><ion-toggle formControlName="readOnly">Read only (no uploads or deletes)</ion-toggle></ion-item>
-          <ion-input label="Only these namespaces (comma separated)" labelPlacement="stacked"
-            formControlName="namespaces" placeholder="All namespaces" />
+          <ion-input label="Only these folders (comma separated)" labelPlacement="stacked"
+            formControlName="namespaces" placeholder="All folders" />
         </form>
       </details>
     } @else {
@@ -67,7 +67,7 @@ import { describeError } from '../../core/ui/format';
             <ion-label>
               <h3>{{ k.scope.readWrite ? 'Full access' : 'Read only' }}</h3>
               <p>
-                {{ k.scope.namespaces.length ? k.scope.namespaces.join(', ') : 'All namespaces' }} ·
+                {{ k.scope.namespaces.length ? k.scope.namespaces.join(', ') : 'All folders' }} ·
                 created {{ k.createdAt | date: 'mediumDate' }}
               </p>
             </ion-label>

@@ -2,8 +2,8 @@ import { Component, inject, OnInit, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import {
-  IonButton, IonCard, IonCardContent, IonCardHeader, IonCardTitle, IonInput, IonItem, IonLabel,
-  IonList, IonNote, IonSelect, IonSelectOption, IonSpinner, IonText, IonToggle,
+  IonButton, IonInput, IonItem, IonLabel, IonList, IonNote, IonSelect, IonSelectOption, IonSpinner,
+  IonText, IonToggle,
 } from '@ionic/angular';
 import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
@@ -13,22 +13,32 @@ import { describeError } from '../../core/ui/format';
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
-/** Namespaces group files and carry their rules (versioning, retention, public reads). */
+/** "Holiday Photos 2026" → "holiday-photos-2026", the form the API accepts for a namespace name. */
+export function folderName(input: string): string {
+  return input.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63);
+}
+
+/**
+ * Folders (the API's namespaces). Everyone starts with `default`, which is enough for most people;
+ * extra folders only matter when groups of files need different rules or separate access keys.
+ */
 @Component({
   selector: 'app-namespaces',
   imports: [
-    ReactiveFormsModule, RouterLink, IonButton, IonCard, IonCardHeader, IonCardTitle, IonCardContent,
-    IonInput, IonItem, IonLabel, IonList, IonNote, IonSelect, IonSelectOption, IonSpinner, IonText,
-    IonToggle,
+    ReactiveFormsModule, RouterLink, IonButton, IonInput, IonItem, IonLabel, IonList, IonNote,
+    IonSelect, IonSelectOption, IonSpinner, IonText, IonToggle,
   ],
   template: `
-    <h1>Namespaces</h1>
+    <h1>Folders</h1>
+    <p>
+      Your files go into the <strong>default</strong> folder unless you make others. Add a folder
+      when a group of files needs its own rules, for example files anyone can open with a link, or a
+      key that may only touch one project.
+    </p>
     @if (problem()) { <ion-text color="danger"><p role="alert">{{ problem() }}</p></ion-text> }
 
     @if (loading()) {
       <ion-spinner name="crescent" aria-label="Loading" />
-    } @else if (items().length === 0) {
-      <p>No namespaces yet.</p>
     } @else {
       <ion-list>
         @for (n of items(); track n.id) {
@@ -36,9 +46,9 @@ const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
             <ion-label>
               <h2>{{ n.name }}</h2>
               <p>
-                versioning {{ n.versioningMode.toLowerCase() }} · tier {{ n.defaultTier }} ·
-                keeps deleted files {{ n.retentionDays }} days
-                @if (n.publicRead) { · public reads }
+                {{ n.versioningMode === 'ENABLED' ? 'Keeps old versions' : 'No old versions' }} ·
+                deleted files recoverable for {{ n.retentionDays }} days
+                @if (n.publicRead) { · anyone with the link can open files }
               </p>
             </ion-label>
           </ion-item>
@@ -47,32 +57,36 @@ const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
     }
 
     @if (session.canManage()) {
-      <ion-card>
-        <ion-card-header><ion-card-title>New namespace</ion-card-title></ion-card-header>
-        <ion-card-content>
-          <form [formGroup]="form" (ngSubmit)="create()" novalidate>
-            <ion-input label="Name" labelPlacement="floating" formControlName="name" autocapitalize="off"
-              helperText="Lowercase letters, digits and dashes" />
-            <ion-select label="Versioning" labelPlacement="floating" formControlName="versioningMode"
-              interface="popover">
-              <ion-select-option value="ENABLED">Keep every version</ion-select-option>
-              <ion-select-option value="SUSPENDED">Suspended</ion-select-option>
-              <ion-select-option value="DISABLED">Off</ion-select-option>
-            </ion-select>
-            <ion-input label="Keep deleted files (days)" labelPlacement="floating" type="number"
-              formControlName="retentionDays" />
-            <ion-item lines="none">
-              <ion-toggle formControlName="publicRead">Allow public reads</ion-toggle>
-            </ion-item>
-            @if (formProblem()) { <ion-text color="danger"><p role="alert">{{ formProblem() }}</p></ion-text> }
-            <ion-button type="submit" [disabled]="form.invalid || creating()">Create namespace</ion-button>
-          </form>
-        </ion-card-content>
-      </ion-card>
+      <h2>New folder</h2>
+      <form [formGroup]="form" (ngSubmit)="create()" novalidate class="create">
+        <ion-input label="Folder name" labelPlacement="stacked" formControlName="name"
+          placeholder="e.g. invoices" autocapitalize="off"
+          [helperText]="preview() ? 'Will be saved as ' + preview() : ''" />
+        <details>
+          <summary>More options</summary>
+          <ion-item lines="none">
+            <ion-toggle formControlName="publicRead">Anyone with the link can open files</ion-toggle>
+          </ion-item>
+          <ion-select label="Old versions" labelPlacement="stacked" formControlName="versioningMode"
+            interface="popover">
+            <ion-select-option value="ENABLED">Keep every version (recommended)</ion-select-option>
+            <ion-select-option value="DISABLED">Only keep the latest</ion-select-option>
+          </ion-select>
+          <ion-input label="Recover deleted files for (days)" labelPlacement="stacked" type="number"
+            formControlName="retentionDays" />
+        </details>
+        @if (formProblem()) { <ion-text color="danger"><p role="alert">{{ formProblem() }}</p></ion-text> }
+        <ion-button type="submit" [disabled]="!preview() || creating()">Create folder</ion-button>
+      </form>
     } @else {
-      <ion-note>Only owners and admins can create namespaces.</ion-note>
+      <ion-note>Only owners and admins can add folders.</ion-note>
     }
   `,
+  styles: [`
+    .create { max-width: 30rem; }
+    details { margin: 0.5rem 0; }
+    summary { cursor: pointer; color: var(--ion-color-medium-shade); }
+  `],
 })
 export class NamespacesPage implements OnInit {
   private readonly api = inject(DepotApi);
@@ -85,11 +99,17 @@ export class NamespacesPage implements OnInit {
   protected readonly creating = signal(false);
 
   protected readonly form = inject(FormBuilder).nonNullable.group({
-    name: ['', [Validators.required, Validators.pattern(NAME_PATTERN)]],
-    versioningMode: ['ENABLED' as 'ENABLED' | 'SUSPENDED' | 'DISABLED'],
-    retentionDays: [30, [Validators.required, Validators.min(0), Validators.max(3650)]],
+    name: ['', Validators.required],
+    versioningMode: ['ENABLED' as 'ENABLED' | 'DISABLED'],
+    retentionDays: [30, [Validators.min(0), Validators.max(3650)]],
     publicRead: [false],
   });
+
+  /** The name as it will be stored, or empty when nothing usable was typed. */
+  protected preview(): string {
+    const name = folderName(this.form.controls.name.value);
+    return NAME_PATTERN.test(name) ? name : '';
+  }
 
   ngOnInit(): void {
     this.load();
@@ -109,13 +129,19 @@ export class NamespacesPage implements OnInit {
   }
 
   protected create(): void {
-    if (this.form.invalid) {
+    const name = this.preview();
+    if (!name) {
       return;
     }
     this.creating.set(true);
     this.formProblem.set(null);
     const v = this.form.getRawValue();
-    this.api.createNamespace({ ...v, retentionDays: Number(v.retentionDays) }).subscribe({
+    this.api.createNamespace({
+      name,
+      versioningMode: v.versioningMode,
+      retentionDays: Number(v.retentionDays) || 30,
+      publicRead: v.publicRead,
+    }).subscribe({
       next: () => {
         this.creating.set(false);
         this.form.reset({ name: '', versioningMode: 'ENABLED', retentionDays: 30, publicRead: false });
@@ -123,7 +149,9 @@ export class NamespacesPage implements OnInit {
       },
       error: (e: ApiError) => {
         this.creating.set(false);
-        this.formProblem.set(describeError(e));
+        this.formProblem.set(describeError(e, {
+          NAMESPACE_EXISTS: 'You already have a folder with that name.',
+        }));
       },
     });
   }

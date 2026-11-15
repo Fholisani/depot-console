@@ -36,15 +36,17 @@ interface UploadJob {
   template: `
     <h1>Files</h1>
 
-    <div class="toolbar">
-      <ion-select label="Namespace" labelPlacement="floating" [value]="namespace()"
-        (ionChange)="setNamespace($event.detail.value)" interface="popover">
-        <ion-select-option value="">All namespaces</ion-select-option>
-        @for (n of namespaces(); track n.id) {
-          <ion-select-option [value]="n.name">{{ n.name }}</ion-select-option>
-        }
-      </ion-select>
-      <ion-searchbar placeholder="Search by name or reference" [debounce]="400"
+    <div class="toolbar" [class.single]="namespaces().length < 2">
+      @if (namespaces().length > 1) {
+        <ion-select label="Folder" labelPlacement="floating" [value]="namespace()"
+          (ionChange)="setNamespace($event.detail.value)" interface="popover">
+          <ion-select-option value="">All folders</ion-select-option>
+          @for (n of namespaces(); track n.id) {
+            <ion-select-option [value]="n.name">{{ n.name }}</ion-select-option>
+          }
+        </ion-select>
+      }
+      <ion-searchbar placeholder="Search your files" [debounce]="400"
         (ionInput)="setQuery($event.detail.value ?? '')" />
     </div>
 
@@ -52,11 +54,8 @@ interface UploadJob {
       <div class="upload">
         <input #picker type="file" multiple hidden (change)="onPick(picker)" />
         <ion-button (click)="picker.click()" [disabled]="!uploadTarget()">
-          Upload to {{ uploadTarget() || '…' }}
+          {{ namespaces().length > 1 ? 'Upload to ' + uploadTarget() : 'Upload files' }}
         </ion-button>
-        @if (!namespace() && namespaces().length > 1) {
-          <ion-note>Choose a namespace above to upload into it; the default namespace is used otherwise.</ion-note>
-        }
       </div>
     }
 
@@ -89,7 +88,10 @@ interface UploadJob {
           <ion-item [routerLink]="['/app/files', hit.objectId]" detail>
             <ion-label>
               <h2>{{ hit.filename }}</h2>
-              <p>{{ hit.namespace }} · {{ bytes(hit.size) }} · {{ hit.contentType ?? 'unknown type' }}</p>
+              <p>
+                @if (namespaces().length > 1) { {{ hit.namespace }} · }
+                {{ bytes(hit.size) }} · {{ hit.contentType ?? 'unknown type' }}
+              </p>
             </ion-label>
             <ion-note slot="end">{{ hit.updatedAt | date: 'mediumDate' }}</ion-note>
           </ion-item>
@@ -104,6 +106,7 @@ interface UploadJob {
     .toolbar { display: grid; grid-template-columns: minmax(10rem, 16rem) 1fr; gap: 0.75rem; align-items: center; }
     .upload { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 0.5rem 0; }
     .job { display: grid; gap: 0.25rem; margin: 0.5rem 0; }
+    .toolbar.single { grid-template-columns: 1fr; }
     @media (max-width: 40rem) { .toolbar { grid-template-columns: 1fr; } }
   `],
 })

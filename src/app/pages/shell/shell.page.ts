@@ -32,7 +32,7 @@ import { describeError } from '../../core/ui/format';
           <nav class="nav" aria-label="Main">
             <a routerLink="/app/dashboard" routerLinkActive="active">Dashboard</a>
             <a routerLink="/app/files" routerLinkActive="active">Files</a>
-            <a routerLink="/app/namespaces" routerLinkActive="active">Namespaces</a>
+            <a routerLink="/app/namespaces" routerLinkActive="active">Folders</a>
             <a routerLink="/app/keys" routerLinkActive="active">Developers</a>
           </nav>
         </ion-toolbar>

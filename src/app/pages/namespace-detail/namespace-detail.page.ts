@@ -33,7 +33,7 @@ const EVENTS = [
     IonSelectOption, IonSpinner, IonText, IonToggle,
   ],
   template: `
-    <p><a routerLink="/app/namespaces">&larr; Namespaces</a></p>
+    <p><a routerLink="/app/namespaces">&larr; Folders</a></p>
     @if (loading()) {
       <ion-spinner name="crescent" aria-label="Loading" />
     } @else if (ns(); as n) {
