@@ -1,6 +1,6 @@
-// Depot Console CI (Requirement 21.22): check the API types against the Depot contract, test,
-// build, and publish the bundle image fholisani/depot-console-bundle:<tag>. There is no deploy
-// step: the Depot API image copies the bundle in, so the Console ships with each API build.
+// Depot Console CI/CD (Requirement 21.22), the same flow as stokvel-admin: check the API types
+// against the Depot contract, test, build, publish the nginx image fholisani/depot-console:<tag>,
+// then set that tag in the deployment repo (prod/depot-console/values.yaml); Argo CD deploys it.
 pipeline {
     options {
         disableConcurrentBuilds(abortPrevious: true)
@@ -8,9 +8,13 @@ pipeline {
     }
 
     environment {
-        RELEASE     = "2026"
-        IMAGE_NAME  = "fholisani/depot-console-bundle"
-        IMAGE_TAG   = "${RELEASE}-${BUILD_NUMBER}"
+        RELEASE        = "2026"
+        IMAGE_NAME     = "fholisani/depot-console"
+        IMAGE_TAG      = "${RELEASE}-${BUILD_NUMBER}"
+        GIT_REPO_NAME  = "deployment"
+        GIT_USER_NAME  = "Fholisani"
+        GIT_USER_EMAIL = "mashegana@yahoo.com"
+        VALUES_FILE    = "prod/depot-console/values.yaml"
     }
 
     agent {
@@ -54,7 +58,7 @@ pipeline {
             }
         }
 
-        stage('Publish bundle image') {
+        stage('Build & Push Image') {
             steps {
                 container('kaniko') {
                     sh """
@@ -67,10 +71,38 @@ pipeline {
                 }
             }
         }
+
+        stage('Update Deployment Repo') {
+            // Argo CD (app depot-console) watches this file and rolls the new image out.
+            steps {
+                container('node') {
+                    sh 'mkdir -p ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts'
+                    sshagent(credentials: ['github-ssh-credential']) {
+                        sh '''
+                            git config --global user.email "${GIT_USER_EMAIL}"
+                            git config --global user.name "${GIT_USER_NAME}"
+                            rm -rf ${GIT_REPO_NAME}
+                            git clone --depth 20 git@github.com:${GIT_USER_NAME}/${GIT_REPO_NAME}.git
+                            cd ${GIT_REPO_NAME}
+                            sed -i -E "s|^(  tag: ).*|\\1\\"${IMAGE_TAG}\\"|" ${VALUES_FILE}
+                            grep -n '  tag:' ${VALUES_FILE}
+                            git add ${VALUES_FILE}
+                            git commit -m "depot-console: image ${IMAGE_TAG}" || { echo "No changes"; exit 0; }
+                            # Other pipelines push here too; rebase and retry instead of failing.
+                            for i in 1 2 3; do
+                                git pull --rebase origin main && git push origin main && exit 0
+                                sleep 5
+                            done
+                            exit 1
+                        '''
+                    }
+                }
+            }
+        }
     }
 
     post {
-        success { echo "Published ${IMAGE_NAME}:${IMAGE_TAG}" }
+        success { echo "Deployed ${IMAGE_NAME}:${IMAGE_TAG} (Argo CD syncs prod/depot-console)" }
         always { cleanWs() }
     }
 }

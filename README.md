@@ -4,8 +4,10 @@ The web app for Depot tenants: sign up, sign in, onboarding, namespaces, the obj
 keys. Angular 22 (standalone, signals, zoneless) with Ionic 9, signing in through Keycloak (realm
 `depot`, client `depot-console`, authorization code with PKCE).
 
-It is served by the Depot API itself at `https://fmash.online/depot-console/`: CI publishes the built
-files as the image `fholisani/depot-console-bundle:<tag>`, and the Depot API image copies it in.
+It runs on its own at `https://fmash.online/depot-console/`, like stokvel-admin. The Jenkins job
+`depot-console` tests and builds it, publishes the nginx image `fholisani/depot-console:<tag>`
+(`Dockerfile`, `nginx.conf`), and sets that tag in the deployment repo (`prod/depot-console`). The
+Argo CD app `depot-console` then rolls it out.
 
 ## Requirements
 
