@@ -1,4 +1,4 @@
-import { provideHttpClient, withInterceptors } from '@angular/common/http';
+import { provideHttpClient, withInterceptors, withXhr } from '@angular/common/http';
 import { ApplicationConfig, provideBrowserGlobalErrorListeners } from '@angular/core';
 import { provideRouter, withComponentInputBinding } from '@angular/router';
 import { provideIonicAngular } from '@ionic/angular';
@@ -16,7 +16,8 @@ export function appConfig(config: AppConfig): ApplicationConfig {
       provideBrowserGlobalErrorListeners(),
       { provide: APP_CONFIG, useValue: config },
       provideRouter(routes, withComponentInputBinding()),
-      provideHttpClient(withInterceptors([depotInterceptor])),
+      // XHR, not the default fetch backend: only XHR reports upload progress (the upload bar).
+      provideHttpClient(withXhr(), withInterceptors([depotInterceptor])),
       provideIonicAngular({ mode: 'md' }),
       provideAuth({
         config: {
