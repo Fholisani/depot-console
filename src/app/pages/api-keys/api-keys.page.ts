@@ -1,6 +1,7 @@
 import { DatePipe } from '@angular/common';
 import { Component, inject, OnInit, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import {
   IonButton, IonInput, IonItem, IonLabel, IonList, IonNote, IonSpinner, IonText, IonToggle,
 } from '@ionic/angular';
@@ -17,14 +18,14 @@ import { describeError } from '../../core/ui/format';
 @Component({
   selector: 'app-api-keys',
   imports: [
-    DatePipe, ReactiveFormsModule, IonButton, IonInput, IonItem, IonLabel, IonList, IonNote,
+    DatePipe, ReactiveFormsModule, RouterLink, IonButton, IonInput, IonItem, IonLabel, IonList, IonNote,
     IonSpinner, IonText, IonToggle,
   ],
   template: `
     <h1>Developers</h1>
-    <p>
+    <p class="muted">
       Access keys let your own programs upload and download files. You do not need one to use this
-      website.
+      website. See the <a routerLink="/docs">developer guide</a> for examples.
     </p>
 
     @if (session.canManage()) {

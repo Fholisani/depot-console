@@ -2,12 +2,20 @@ import { Routes } from '@angular/router';
 import { autoLoginPartialRoutesGuard } from 'angular-auth-oidc-client';
 
 export const routes: Routes = [
-  // Public pages (no sign-in).
-  { path: '', loadComponent: () => import('./pages/home/home.page').then((m) => m.HomePage) },
-  { path: 'signup', loadComponent: () => import('./pages/signup/signup.page').then((m) => m.SignupPage) },
+  // Public site (no sign-in), inside the shared header and footer.
   {
-    path: 'verify-email',
-    loadComponent: () => import('./pages/verify-email/verify-email.page').then((m) => m.VerifyEmailPage),
+    path: '',
+    loadComponent: () => import('./pages/public/public-layout').then((m) => m.PublicLayout),
+    children: [
+      { path: '', pathMatch: 'full', loadComponent: () => import('./pages/home/home.page').then((m) => m.HomePage) },
+      { path: 'pricing', loadComponent: () => import('./pages/pricing/pricing.page').then((m) => m.PricingPage) },
+      { path: 'docs', loadComponent: () => import('./pages/docs/docs.page').then((m) => m.DocsPage) },
+      { path: 'signup', loadComponent: () => import('./pages/signup/signup.page').then((m) => m.SignupPage) },
+      {
+        path: 'verify-email',
+        loadComponent: () => import('./pages/verify-email/verify-email.page').then((m) => m.VerifyEmailPage),
+      },
+    ],
   },
   // Signed-in area, inside the shell.
   {

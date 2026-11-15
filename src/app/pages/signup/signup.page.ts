@@ -1,9 +1,7 @@
 import { Component, inject, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
-import { RouterLink } from '@angular/router';
 import {
-  IonButton, IonButtons, IonContent, IonHeader, IonInput, IonInputPasswordToggle, IonItem,
-  IonSpinner, IonText, IonTitle, IonToolbar,
+  IonButton, IonInput, IonInputPasswordToggle, IonItem, IonSpinner, IonText,
 } from '@ionic/angular';
 import { OidcSecurityService } from 'angular-auth-oidc-client';
 import { firstValueFrom } from 'rxjs';
@@ -57,20 +55,14 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
 @Component({
   selector: 'app-signup',
   imports: [
-    ReactiveFormsModule, RouterLink, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton,
-    IonContent, IonItem, IonInput, IonInputPasswordToggle, IonText, IonSpinner,
+    ReactiveFormsModule, IonButton, IonItem, IonInput, IonInputPasswordToggle, IonText, IonSpinner,
   ],
   template: `
-    <ion-header>
-      <ion-toolbar>
-        <ion-title>Create your account</ion-title>
-        <ion-buttons slot="end"><ion-button routerLink="/">Back</ion-button></ion-buttons>
-      </ion-toolbar>
-    </ion-header>
-    <ion-content class="ion-padding">
-      <div class="narrow">
+    <div class="container">
+      <div class="card narrow">
         @if (done()) {
-          <h2>Check your email</h2>
+          <div class="mail" aria-hidden="true">✉</div>
+          <h1>Check your email</h1>
           <p>
             We sent a link to <strong>{{ form.controls.email.value }}</strong>. Open it to confirm your
             address, then sign in.
@@ -81,6 +73,8 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
           </ion-button>
           @if (problem()) { <ion-text color="danger"><p role="alert">{{ problem() }}</p></ion-text> }
         } @else {
+          <h1>Create your account</h1>
+          <p class="muted sub">5 GB free. No card needed.</p>
           <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
             <ion-item>
               <ion-input label="Email" labelPlacement="stacked" type="email" formControlName="email"
@@ -102,14 +96,20 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
               @if (submitting()) { <ion-spinner name="crescent" /> } @else { Create account }
             </ion-button>
           </form>
-          <p class="ion-text-center">
+          <p class="ion-text-center muted">
             Already have an account? <a href="#" (click)="$event.preventDefault(); signIn()">Sign in</a>
           </p>
         }
       </div>
-    </ion-content>
+    </div>
   `,
-  styles: [`.narrow { max-width: 26rem; margin: 2rem auto; }`],
+  styles: [`
+    .narrow { max-width: 26rem; margin: 4rem auto; }
+    h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+    .sub { margin: 0 0 1.25rem; }
+    .mail { font-size: 2rem; color: var(--ion-color-primary); }
+    ion-item { --padding-start: 0; --inner-padding-end: 0; margin-bottom: 0.5rem; }
+  `],
 })
 export class SignupPage {
   private readonly api = inject(DepotApi);
