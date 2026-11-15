@@ -5,6 +5,7 @@ import { IonButton, IonSpinner } from '@ionic/angular';
 import { DepotApi } from '../../core/api/depot-api.service';
 import type { SharedFile } from '../../core/api/models';
 import { formatBytes } from '../../core/ui/format';
+import { currentEnvironment } from '../../core/slot/slot.service';
 
 const KIND_LABEL: Record<string, string> = {
   image: 'Photo', video: 'Video', audio: 'Audio', pdf: 'Document', other: 'File',
@@ -16,6 +17,9 @@ const KIND_LABEL: Record<string, string> = {
   imports: [DatePipe, IonButton, IonSpinner, RouterLink],
   template: `
     <section class="container share">
+      @if (env !== 'active') {
+        <p class="envnote">{{ env === 'dev' ? 'Test mode on this computer' : 'Test version' }}</p>
+      }
       @if (file(); as f) {
         @if (!cannotShow()) {
           @switch (f.kind) {
@@ -66,6 +70,7 @@ const KIND_LABEL: Record<string, string> = {
     .desc { font-size: 1.05rem; white-space: pre-wrap; }
     .meta { color: var(--ion-color-medium); }
     .foot { margin-top: 2rem; font-size: 0.9rem; }
+    .envnote { background: #fff4d6; color: #7a5a00; border-radius: 8px; padding: 0.3rem 0.6rem; display: inline-block; font-size: 0.85rem; }
   `],
 })
 export class SharePage implements OnInit {
@@ -76,6 +81,7 @@ export class SharePage implements OnInit {
   protected readonly gone = signal(false);
   protected readonly cannotShow = signal(false);
   protected readonly bytes = formatBytes;
+  protected readonly env = currentEnvironment();
 
   ngOnInit(): void {
     this.api.sharedFile(this.token).subscribe({

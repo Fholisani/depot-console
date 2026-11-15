@@ -34,6 +34,29 @@ export function applySlotParameter(): boolean {
   return true;
 }
 
+export type Environment = 'dev' | 'passive' | 'active';
+
+/** Where this page is running: on the developer's machine, the passive (test) slot, or the live one. */
+export function currentEnvironment(): Environment {
+  if (['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
+    return 'dev';
+  }
+  return isPassive() ? 'passive' : 'active';
+}
+
+/**
+ * The address to hand out for a share token. It points back at the environment it was made in:
+ * a link made on the passive slot opens on the passive slot (`?slot=passive` switches the visitor's
+ * browser there), and a link made while developing opens on this machine only.
+ */
+export function shareLinkFor(token: string): string {
+  const url = new URL(`s/${token}`, document.baseURI);
+  if (currentEnvironment() === 'passive') {
+    url.searchParams.set('slot', 'passive');
+  }
+  return url.href;
+}
+
 /**
  * Active/Passive tester toggle (Requirement 17.20). In passive mode the page comes from the passive
  * Console (cookie) and API calls carry `X-Slot: Passive`, so the whole session runs on the passive

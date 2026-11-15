@@ -6,6 +6,7 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { firstValueFrom, Subscription, type Observable } from 'rxjs';
 import { hideObject, unhideObject } from '../../core/ui/hidden-objects';
 import { ConfirmService } from '../../core/ui/confirm.service';
+import { currentEnvironment, shareLinkFor } from '../../core/slot/slot.service';
 import {
   IonBadge, IonButton, IonCard, IonCardContent, IonCardHeader, IonCardTitle, IonInput, IonItem,
   IonLabel, IonList, IonNote, IonProgressBar, IonSelect, IonSelectOption, IonSpinner, IonText,
@@ -140,6 +141,11 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
           <ion-card-header><ion-card-title>Share</ion-card-title></ion-card-header>
           <ion-card-content>
             <p class="muted">Anyone with the link can see and download this file. No account needed.</p>
+            @if (environment === 'dev') {
+              <ion-note color="warning">Test mode on this computer: links made here only open on this computer.</ion-note>
+            } @else if (environment === 'passive') {
+              <ion-note color="warning">Test version: links made here open the test version, not the live site.</ion-note>
+            }
             <ion-input label="Add a note (optional)" labelPlacement="floating" maxlength="280"
               [(ngModel)]="shareNote" placeholder="e.g. Our trip to the coast" />
             <ion-select label="Link works for" labelPlacement="floating" [(ngModel)]="shareDays"
@@ -272,6 +278,7 @@ export class ObjectPage implements OnInit, OnDestroy {
   protected readonly message = signal<string | null>(null);
   protected readonly bytes = formatBytes;
   protected copyTarget = '';
+  protected readonly environment = currentEnvironment();
   protected shareNote = '';
   protected shareDays = 7;
   protected readonly fileShares = signal<Share[]>([]);
@@ -311,7 +318,7 @@ export class ObjectPage implements OnInit, OnDestroy {
   }
 
   protected shareUrl(token: string): string {
-    return new URL(`s/${token}`, document.baseURI).href;
+    return shareLinkFor(token);
   }
 
   private loadShares(): void {
