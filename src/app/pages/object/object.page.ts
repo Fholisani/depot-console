@@ -5,6 +5,7 @@ import { HttpEventType } from '@angular/common/http';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { firstValueFrom, type Observable } from 'rxjs';
 import { hideObject, unhideObject } from '../../core/ui/hidden-objects';
+import { ConfirmService } from '../../core/ui/confirm.service';
 import {
   IonBadge, IonButton, IonCard, IonCardContent, IonCardHeader, IonCardTitle, IonInput, IonItem,
   IonLabel, IonList, IonNote, IonProgressBar, IonSelect, IonSelectOption, IonSpinner, IonText,
@@ -172,6 +173,7 @@ export class ObjectPage implements OnInit, OnDestroy {
   private readonly api = inject(DepotApi);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly confirm = inject(ConfirmService);
   protected readonly session = inject(SessionService);
 
   protected readonly id = this.route.snapshot.paramMap.get('id') ?? '';
@@ -281,13 +283,17 @@ export class ObjectPage implements OnInit, OnDestroy {
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
-  protected remove(): void {
-    if (!confirm('Delete this file? You can undelete it until its versions are purged.')) {
+  protected async remove(): Promise<void> {
+    if (!await this.confirm.ask({
+      header: 'Delete this file?',
+      message: 'It moves to the bin. You can undelete it until the folder\'s recovery period ends.',
+      confirmText: 'Delete', destructive: true,
+    })) {
       return;
     }
     this.run(() => this.api.deleteObject(this.id), () => {
       hideObject(this.id);
-      this.done('File deleted.');
+      void this.router.navigateByUrl('/app/files');
     });
   }
 
@@ -300,7 +306,11 @@ export class ObjectPage implements OnInit, OnDestroy {
 
   /** Purges every version of a deleted file, then returns to the list. Cannot be undone. */
   protected async deleteForever(): Promise<void> {
-    if (!confirm('Delete this file forever? All its versions are removed and it cannot be recovered.')) {
+    if (!await this.confirm.ask({
+      header: 'Delete forever?',
+      message: 'All versions of this file are removed and it cannot be recovered.',
+      confirmText: 'Delete forever', destructive: true,
+    })) {
       return;
     }
     this.busy.set(true);
@@ -322,8 +332,12 @@ export class ObjectPage implements OnInit, OnDestroy {
     this.run(() => this.api.restoreVersion(this.id, v.versionId), () => this.done(`Version ${v.versionNo} restored as the current version.`));
   }
 
-  protected purge(v: Version): void {
-    if (!confirm(`Permanently delete version ${v.versionNo}? This cannot be undone.`)) {
+  protected async purge(v: Version): Promise<void> {
+    if (!await this.confirm.ask({
+      header: `Delete version ${v.versionNo} forever?`,
+      message: 'This version is removed for good. Other versions stay.',
+      confirmText: 'Delete forever', destructive: true,
+    })) {
       return;
     }
     this.run(() => this.api.purgeVersion(this.id, v.versionId), () => this.done('Version purged.'));

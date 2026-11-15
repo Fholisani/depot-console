@@ -13,6 +13,7 @@ import type {
 } from '../../core/api/models';
 import { SessionService } from '../../core/tenant/session.service';
 import { describeError, formatBytes } from '../../core/ui/format';
+import { ConfirmService } from '../../core/ui/confirm.service';
 
 const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
   NAMESPACE_NOT_FOUND: 'That namespace does not exist.',
@@ -171,6 +172,7 @@ const EVENTS = [
 export class NamespaceDetailPage implements OnInit {
   private readonly api = inject(DepotApi);
   private readonly router = inject(Router);
+  private readonly confirm = inject(ConfirmService);
   protected readonly session = inject(SessionService);
   private readonly name = inject(ActivatedRoute).snapshot.paramMap.get('name') ?? '';
 
@@ -253,8 +255,12 @@ export class NamespaceDetailPage implements OnInit {
     }), 'Settings saved.');
   }
 
-  protected remove(): void {
-    if (!confirm(`Delete namespace "${this.name}"? It must be empty.`)) {
+  protected async remove(): Promise<void> {
+    if (!await this.confirm.ask({
+      header: `Delete folder "${this.name}"?`,
+      message: 'The folder must be empty.',
+      confirmText: 'Delete', destructive: true,
+    })) {
       return;
     }
     this.busy.set(true);
@@ -304,8 +310,11 @@ export class NamespaceDetailPage implements OnInit {
     this.act(this.api.setLifecycleRuleEnabled(this.name, r.id, !r.enabled), 'Rule updated.', () => this.loadRules());
   }
 
-  protected deleteRule(r: LifecycleRule): void {
-    if (confirm(`Delete rule "${r.name}"?`)) {
+  protected async deleteRule(r: LifecycleRule): Promise<void> {
+    if (await this.confirm.ask({
+      header: `Delete rule "${r.name}"?`, message: 'Files it already acted on are not changed.',
+      confirmText: 'Delete', destructive: true,
+    })) {
       this.act(this.api.deleteLifecycleRule(this.name, r.id), 'Rule deleted.', () => this.loadRules());
     }
   }
@@ -323,8 +332,11 @@ export class NamespaceDetailPage implements OnInit {
     this.act(this.api.setWebhookEnabled(this.name, w.id, !w.enabled), 'Webhook updated.', () => this.loadHooks());
   }
 
-  protected deleteHook(w: Webhook): void {
-    if (confirm(`Delete the webhook for ${w.url}?`)) {
+  protected async deleteHook(w: Webhook): Promise<void> {
+    if (await this.confirm.ask({
+      header: 'Delete webhook?', message: `${w.url} will stop receiving events.`,
+      confirmText: 'Delete', destructive: true,
+    })) {
       this.act(this.api.deleteWebhook(this.name, w.id), 'Webhook deleted.', () => this.loadHooks());
     }
   }

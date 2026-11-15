@@ -10,6 +10,7 @@ import { DepotApi } from '../../core/api/depot-api.service';
 import type { ApiKey, CreatedApiKey } from '../../core/api/models';
 import { SessionService } from '../../core/tenant/session.service';
 import { describeError } from '../../core/ui/format';
+import { ConfirmService } from '../../core/ui/confirm.service';
 
 /**
  * Access keys for programs. One click creates a full-access key and copies it; limits are optional
@@ -93,6 +94,7 @@ import { describeError } from '../../core/ui/format';
 })
 export class ApiKeysPage implements OnInit {
   private readonly api = inject(DepotApi);
+  private readonly confirm = inject(ConfirmService);
   protected readonly session = inject(SessionService);
 
   protected readonly keys = signal<ApiKey[]>([]);
@@ -154,8 +156,11 @@ export class ApiKeysPage implements OnInit {
     });
   }
 
-  protected revoke(k: ApiKey): void {
-    if (!confirm('Revoke this key? Programs using it stop working immediately.')) {
+  protected async revoke(k: ApiKey): Promise<void> {
+    if (!await this.confirm.ask({
+      header: 'Revoke this key?', message: 'Programs using it stop working immediately.',
+      confirmText: 'Revoke', destructive: true,
+    })) {
       return;
     }
     this.api.revokeApiKey(k.id).subscribe({

@@ -77,6 +77,12 @@ code {
   font-size: 0.9em;
 }
 
+/* Confirm dialogs: the destructive button in red (ConfirmService). */
+ion-alert .alert-button-danger {
+  color: var(--ion-color-danger) !important;
+  font-weight: 600;
+}
+
 /* Native <details> used for "More options". */
 details > summary {
   cursor: pointer;
