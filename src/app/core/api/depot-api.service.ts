@@ -183,15 +183,18 @@ export class DepotApi {
     return this.get<Progress>(`/v1/objects/${id}/progress`);
   }
 
-  /** Content as a blob, streamed through the API so the bearer token never reaches storage. */
-  download(id: string, version?: string): Observable<Blob> {
+  /**
+   * Content as a blob, streamed through the API so the bearer token never reaches storage. Emits
+   * download progress events (XHR backend) and then the response with the blob.
+   */
+  download(id: string, version?: string): Observable<HttpEvent<Blob>> {
     let params = new HttpParams().set('mode', 'proxy').set('download', 'true');
     if (version) {
       params = params.set('version', version);
     }
-    return this.http.get(this.url(`/v1/objects/${id}/content`), { params, responseType: 'blob' }).pipe(
-      catchError((e) => throwError(() => ApiError.from(e))),
-    );
+    return this.http.get(this.url(`/v1/objects/${id}/content`), {
+      params, responseType: 'blob', observe: 'events', reportProgress: true,
+    }).pipe(catchError((e) => throwError(() => ApiError.from(e))));
   }
 
   // ------------------------------------------------------------------ uploads

@@ -1,6 +1,7 @@
 import { DatePipe } from '@angular/common';
 import { Component, inject, OnDestroy, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { HttpEventType } from '@angular/common/http';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import type { Observable } from 'rxjs';
 import {
@@ -59,6 +60,17 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
           <ion-progress-bar [value]="p.percent / 100" aria-label="Processing progress" />
           <ion-note>{{ p.phase }} · {{ p.percent }}%</ion-note>
         }
+      }
+
+      @if (downloading(); as d) {
+        <div class="dl">
+          @if (d.total > 0) {
+            <ion-progress-bar [value]="d.loaded / d.total" [attr.aria-label]="'Downloading ' + d.name" />
+          } @else {
+            <ion-progress-bar type="indeterminate" [attr.aria-label]="'Downloading ' + d.name" />
+          }
+          <ion-note aria-live="polite">{{ downloadText(d) }}</ion-note>
+        </div>
       }
 
       <div class="actions">
@@ -140,6 +152,7 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
   `,
   styles: [`
     .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .dl { display: grid; gap: 0.25rem; margin: 0.75rem 0; font-size: 0.85rem; }
     .tag { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.5rem; align-items: center; }
     .wrap { word-break: break-all; }
     .tagbadge { margin-right: 0.35rem; }
@@ -156,6 +169,7 @@ export class ObjectPage implements OnInit, OnDestroy {
   protected readonly tagRows = signal<TagRow[]>([]);
   protected readonly namespaces = signal<Namespace[]>([]);
   protected readonly progress = signal<Progress | null>(null);
+  protected readonly downloading = signal<{ name: string; loaded: number; total: number } | null>(null);
   protected readonly loading = signal(true);
   protected readonly busy = signal(false);
   protected readonly problem = signal<string | null>(null);
@@ -210,15 +224,50 @@ export class ObjectPage implements OnInit, OnDestroy {
     });
   }
 
+  /** Downloads with a progress bar, then hands the file to the browser to save. */
   protected download(version?: Version): void {
-    this.run(() => this.api.download(this.id, version?.versionId), (blob: Blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = version?.filename ?? this.object()?.latest?.filename ?? 'download';
-      a.click();
-      URL.revokeObjectURL(url);
+    const name = version?.filename ?? this.object()?.latest?.filename ?? 'download';
+    const expected = version?.size ?? this.object()?.latest?.size ?? 0;
+    this.busy.set(true);
+    this.problem.set(null);
+    this.message.set(null);
+    this.downloading.set({ name, loaded: 0, total: expected });
+    this.api.download(this.id, version?.versionId).subscribe({
+      next: (event) => {
+        if (event.type === HttpEventType.DownloadProgress) {
+          this.downloading.set({ name, loaded: event.loaded, total: event.total ?? expected });
+        } else if (event.type === HttpEventType.Response && event.body) {
+          this.save(event.body, name);
+          this.downloading.set(null);
+          this.busy.set(false);
+          this.message.set(`${name} downloaded.`);
+        }
+      },
+      error: (e: ApiError) => {
+        this.downloading.set(null);
+        this.busy.set(false);
+        this.problem.set(describeError(e, PROBLEMS));
+      },
     });
+  }
+
+  /** "Downloading 42% · 20 MB of 48 MB", or just the bytes when the size is unknown. */
+  protected downloadText(d: { loaded: number; total: number }): string {
+    if (d.total > 0) {
+      const pct = Math.min(100, Math.floor((d.loaded / d.total) * 100));
+      return `Downloading ${pct}% · ${this.bytes(d.loaded)} of ${this.bytes(d.total)}`;
+    }
+    return `Downloading · ${this.bytes(d.loaded)}`;
+  }
+
+  private save(blob: Blob, name: string): void {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    // Give the browser a moment to start the save before the blob URL goes away.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
   protected remove(): void {
