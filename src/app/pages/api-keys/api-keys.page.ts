@@ -7,7 +7,7 @@ import {
 } from '@ionic/angular';
 import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
-import type { ApiKey, CreatedApiKey } from '../../core/api/models';
+import type { ApiKey, CreatedApiKey, OnboardingStep } from '../../core/api/models';
 import { SessionService } from '../../core/tenant/session.service';
 import { describeError } from '../../core/ui/format';
 import { ConfirmService } from '../../core/ui/confirm.service';
@@ -28,6 +28,26 @@ import { ConfirmService } from '../../core/ui/confirm.service';
       Access keys let your own programs upload and download files. You do not need one to use this
       website. See the <a routerLink="/docs">developer guide</a> for examples.
     </p>
+
+    @if (session.firstKey(); as key) {
+      <div class="new" role="status">
+        <p><strong>Your first access key</strong> was created when you signed in. It is shown only now.</p>
+        <code class="secret">{{ key }}</code>
+        <ion-button size="small" (click)="copy(key)">{{ copied() ? 'Copied' : 'Copy key' }}</ion-button>
+        <ion-button size="small" fill="clear" (click)="session.dismissKey()">Hide</ion-button>
+      </div>
+    }
+
+    @if (steps().length > 0) {
+      <details class="steps" [open]="!allDone()">
+        <summary>Getting started with the API ({{ doneCount() }} of {{ steps().length }} done)</summary>
+        <ul>
+          @for (s of steps(); track s.id) {
+            <li [class.done]="s.done">{{ s.done ? '\u2713' : '\u25CB' }} {{ s.title }}</li>
+          }
+        </ul>
+      </details>
+    }
 
     @if (session.canManage()) {
       <ion-button (click)="create()" [disabled]="busy()">
@@ -90,6 +110,9 @@ import { ConfirmService } from '../../core/ui/confirm.service';
     .new { border: 1px solid var(--ion-color-success); border-radius: 8px; padding: 0.75rem; margin: 1rem 0; }
     .secret { display: block; word-break: break-all; margin: 0.5rem 0; }
     .hint { color: var(--ion-color-medium-shade); font-size: 0.9rem; }
+    .steps { margin: 1rem 0; }
+    .steps ul { list-style: none; padding-left: 0.25rem; line-height: 1.9; margin: 0.5rem 0 0; }
+    .steps li.done { color: var(--depot-muted); }
   `],
 })
 export class ApiKeysPage implements OnInit {
@@ -117,8 +140,17 @@ export class ApiKeysPage implements OnInit {
     return this.keys().length - this.active().length;
   }
 
+  protected readonly steps = signal<OnboardingStep[]>([]);
+  protected doneCount(): number {
+    return this.steps().filter((s) => s.done).length;
+  }
+  protected allDone(): boolean {
+    return this.doneCount() === this.steps().length;
+  }
+
   ngOnInit(): void {
     this.load();
+    this.api.onboarding().subscribe({ next: (s) => this.steps.set(s), error: () => this.steps.set([]) });
   }
 
   private load(): void {
