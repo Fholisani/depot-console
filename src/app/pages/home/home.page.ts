@@ -88,8 +88,8 @@ import { IonButton } from '@ionic/angular';
 export class HomePage {
   protected readonly features = [
     { icon: '🎬', title: 'Full quality, always', text: 'Your 4K edit comes back byte for byte. Depot checks every file when it arrives.' },
-    { icon: '�', title: 'Free up your phone', text: 'Keep your camera roll for new moments. Your old ones are one tap away.' },
-    { icon: '�', title: 'Nothing lost by accident', text: 'Deleted something? Get it back for 30 days. Older versions are kept too.' },
+    { icon: '\u{1F4F1}', title: 'Free up your phone', text: 'Keep your camera roll for new moments. Your old ones are a download away.' },
+    { icon: '\u{1F558}', title: 'Nothing lost by accident', text: 'Deleted something? Get it back for 30 days. Older versions are kept too.' },
     { icon: '🔎', title: 'Find any ride', text: 'Search by name and add your own tags, like "Drakensberg" or "2026".' },
   ];
 }
