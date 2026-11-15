@@ -187,13 +187,15 @@ export class DepotApi {
    * Content as a blob, streamed through the API so the bearer token never reaches storage. Emits
    * download progress events (XHR backend) and then the response with the blob.
    */
-  download(id: string, version?: string): Observable<HttpEvent<Blob>> {
+  download(id: string, version?: string, range?: { from: number; to: number }): Observable<HttpEvent<Blob>> {
     let params = new HttpParams().set('mode', 'proxy').set('download', 'true');
     if (version) {
       params = params.set('version', version);
     }
+    // A byte range (inclusive) answers 206 with just that piece; proxy mode supports Range.
+    const headers = range ? new HttpHeaders({ Range: `bytes=${range.from}-${range.to}` }) : undefined;
     return this.http.get(this.url(`/v1/objects/${id}/content`), {
-      params, responseType: 'blob', observe: 'events', reportProgress: true,
+      params, headers, responseType: 'blob', observe: 'events', reportProgress: true,
     }).pipe(catchError((e) => throwError(() => ApiError.from(e))));
   }
 

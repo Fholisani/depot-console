@@ -3,7 +3,7 @@ import { Component, inject, OnDestroy, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { HttpEventType } from '@angular/common/http';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { firstValueFrom, type Observable } from 'rxjs';
+import { firstValueFrom, Subscription, type Observable } from 'rxjs';
 import { hideObject, unhideObject } from '../../core/ui/hidden-objects';
 import { ConfirmService } from '../../core/ui/confirm.service';
 import {
@@ -20,6 +20,9 @@ interface TagRow {
   key: string;
   value: string;
 }
+
+/** Download piece size: what a pause can lose at most, and the memory held per request. */
+const DOWNLOAD_PIECE = 16 * 1024 * 1024;
 
 const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
   RESOURCE_NOT_FOUND: 'That file does not exist, or it is not in this tenant.',
@@ -71,7 +74,15 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
           } @else {
             <ion-progress-bar type="indeterminate" [attr.aria-label]="'Downloading ' + d.name" />
           }
-          <ion-note aria-live="polite">{{ downloadText(d) }}</ion-note>
+          <div class="dl-controls">
+            <ion-note aria-live="polite">{{ downloadText(d) }}</ion-note>
+            @if (d.paused) {
+              <ion-button size="small" fill="clear" (click)="resumeDownload()">Resume</ion-button>
+            } @else if (d.total > 0) {
+              <ion-button size="small" fill="clear" (click)="pauseDownload()">Pause</ion-button>
+            }
+            <ion-button size="small" fill="clear" color="medium" (click)="cancelDownload()">Cancel</ion-button>
+          </div>
         </div>
       }
 
@@ -164,6 +175,7 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
   styles: [`
     .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .dl { display: grid; gap: 0.25rem; margin: 0.75rem 0; font-size: 0.85rem; }
+    .dl-controls { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
     .tag { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.5rem; align-items: center; }
     .wrap { word-break: break-all; }
     .tagbadge { margin-right: 0.35rem; }
@@ -182,7 +194,11 @@ export class ObjectPage implements OnInit, OnDestroy {
   protected readonly tagRows = signal<TagRow[]>([]);
   protected readonly namespaces = signal<Namespace[]>([]);
   protected readonly progress = signal<Progress | null>(null);
-  protected readonly downloading = signal<{ name: string; loaded: number; total: number } | null>(null);
+  protected readonly downloading =
+    signal<{ name: string; loaded: number; total: number; paused?: boolean } | null>(null);
+  private dl: { name: string; versionId?: string; total: number } | null = null;
+  private dlChunks: Blob[] = [];
+  private dlSub: Subscription | null = null;
   protected readonly loading = signal(true);
   protected readonly busy = signal(false);
   protected readonly problem = signal<string | null>(null);
@@ -237,26 +253,81 @@ export class ObjectPage implements OnInit, OnDestroy {
     });
   }
 
-  /** Downloads with a progress bar, then hands the file to the browser to save. */
+  /** Starts a download with a progress bar; it can be paused, resumed and cancelled. */
   protected download(version?: Version): void {
-    const name = version?.filename ?? this.object()?.latest?.filename ?? 'download';
-    const expected = version?.size ?? this.object()?.latest?.size ?? 0;
-    this.busy.set(true);
+    const o = this.object();
     this.problem.set(null);
     this.message.set(null);
-    this.downloading.set({ name, loaded: 0, total: expected });
-    this.api.download(this.id, version?.versionId).subscribe({
+    this.dlChunks = [];
+    this.dl = {
+      name: version?.filename ?? o?.latest?.filename ?? 'download',
+      // Pin the version so a resumed download continues the same bytes even if a new one appears.
+      versionId: version?.versionId ?? o?.currentVersionId ?? undefined,
+      total: version?.size ?? o?.latest?.size ?? 0,
+    };
+    this.busy.set(true);
+    this.fetchFrom(0);
+  }
+
+  protected pauseDownload(): void {
+    this.dlSub?.unsubscribe();
+    this.dlSub = null;
+    const d = this.downloading();
+    if (d) {
+      this.downloading.set({ ...d, paused: true });
+    }
+  }
+
+  protected resumeDownload(): void {
+    const d = this.downloading();
+    if (d) {
+      this.fetchFrom(this.received());
+    }
+  }
+
+  protected cancelDownload(): void {
+    this.dlSub?.unsubscribe();
+    this.dlSub = null;
+    this.dlChunks = [];
+    this.downloading.set(null);
+    this.busy.set(false);
+  }
+
+  /**
+   * Fetches the file in pieces of DOWNLOAD_PIECE bytes from `offset` on (Range requests), so a pause
+   * loses at most the piece in flight and resume continues from the last complete piece. When the
+   * size is unknown the whole file is fetched in one request.
+   */
+  private fetchFrom(offset: number): void {
+    const meta = this.dl;
+    if (!meta) {
+      return;
+    }
+    const whole = meta.total <= 0;
+    const range = whole ? undefined : { from: offset, to: Math.min(offset + DOWNLOAD_PIECE, meta.total) - 1 };
+    this.downloading.set({ name: meta.name, loaded: offset, total: meta.total, paused: false });
+    this.dlSub = this.api.download(this.id, meta.versionId, range).subscribe({
       next: (event) => {
         if (event.type === HttpEventType.DownloadProgress) {
-          this.downloading.set({ name, loaded: event.loaded, total: event.total ?? expected });
+          this.downloading.set({ name: meta.name, loaded: offset + event.loaded, total: meta.total, paused: false });
         } else if (event.type === HttpEventType.Response && event.body) {
-          this.save(event.body, name);
+          // 206 is the requested piece; a 200 is the whole file (the server ignored the range).
+          this.dlChunks = event.status === 206 ? [...this.dlChunks, event.body] : [event.body];
+          const got = this.received();
+          if (event.status === 206 && got < meta.total) {
+            this.fetchFrom(got);
+            return;
+          }
+          this.save(new Blob(this.dlChunks), meta.name);
+          this.dlChunks = [];
+          this.dlSub = null;
           this.downloading.set(null);
           this.busy.set(false);
-          this.message.set(`${name} downloaded.`);
+          this.message.set(`${meta.name} downloaded.`);
         }
       },
       error: (e: ApiError) => {
+        this.dlSub = null;
         this.downloading.set(null);
         this.busy.set(false);
         this.problem.set(describeError(e, PROBLEMS));
@@ -264,13 +335,19 @@ export class ObjectPage implements OnInit, OnDestroy {
     });
   }
 
-  /** "Downloading 42% · 20 MB of 48 MB", or just the bytes when the size is unknown. */
-  protected downloadText(d: { loaded: number; total: number }): string {
+  /** Bytes of the pieces received so far. */
+  private received(): number {
+    return this.dlChunks.reduce((n, b) => n + b.size, 0);
+  }
+
+  /** "Downloading 42% · 20 MB of 48 MB", "Paused at 42% …", or just the bytes when the size is unknown. */
+  protected downloadText(d: { loaded: number; total: number; paused?: boolean }): string {
+    const verb = d.paused ? 'Paused at' : 'Downloading';
     if (d.total > 0) {
       const pct = Math.min(100, Math.floor((d.loaded / d.total) * 100));
-      return `Downloading ${pct}% · ${this.bytes(d.loaded)} of ${this.bytes(d.total)}`;
+      return `${verb} ${pct}% · ${this.bytes(d.loaded)} of ${this.bytes(d.total)}`;
     }
-    return `Downloading · ${this.bytes(d.loaded)}`;
+    return `${verb} · ${this.bytes(d.loaded)}`;
   }
 
   private save(blob: Blob, name: string): void {

@@ -9,7 +9,7 @@ import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
 import type { Namespace, ObjectResult, SearchHit } from '../../core/api/models';
 import { SessionService } from '../../core/tenant/session.service';
-import { UploadPhase, UploadService } from '../../core/upload/upload.service';
+import { UploadCancelled, UploadPhase, UploadService, UploadTask } from '../../core/upload/upload.service';
 import { hiddenObjects } from '../../core/ui/hidden-objects';
 import { describeError, formatBytes } from '../../core/ui/format';
 
@@ -18,7 +18,9 @@ const RECENT_KEY = 'depot.recentUploads';
 const RECENT_MAX = 20;
 
 interface UploadJob {
+  id: string;
   name: string;
+  cancelled?: boolean;
   /** Present only in the tab that started the upload; needed to retry. */
   file?: File;
   target: string;
@@ -69,15 +71,32 @@ interface UploadJob {
           @if (job.file) {
             <ion-button size="small" fill="outline" (click)="retry(job)">Retry</ion-button>
           }
+        } @else if (job.cancelled) {
+          <ion-note>Cancelled</ion-note>
+          @if (job.file) {
+            <ion-button size="small" fill="outline" (click)="retry(job)">Upload again</ion-button>
+          }
         } @else if (job.result; as r) {
           <a [routerLink]="['/app/files', r.objectId]">Uploaded · {{ r.status }}</a>
         } @else {
-          @if (job.phase === 'uploading') {
-            <ion-progress-bar [value]="job.percent / 100" [attr.aria-label]="'Uploading ' + job.name" />
+          @if (job.phase === 'uploading' || job.phase === 'paused') {
+            <ion-progress-bar [value]="job.percent / 100" [color]="job.phase === 'paused' ? 'medium' : 'primary'"
+              [attr.aria-label]="'Uploading ' + job.name" />
           } @else {
             <ion-progress-bar type="indeterminate" [attr.aria-label]="'Uploading ' + job.name" />
           }
-          <ion-note class="status" aria-live="polite">{{ statusText(job) }}</ion-note>
+          <div class="controls">
+            <ion-note class="status" aria-live="polite">{{ statusText(job) }}</ion-note>
+            @if (pausable(job) && job.phase === 'uploading') {
+              <ion-button size="small" fill="clear" (click)="pause(job)">Pause</ion-button>
+            }
+            @if (job.phase === 'paused') {
+              <ion-button size="small" fill="clear" (click)="resume(job)">Resume</ion-button>
+            }
+            @if (job.phase !== 'finishing') {
+              <ion-button size="small" fill="clear" color="medium" (click)="cancel(job)">Cancel</ion-button>
+            }
+          </div>
         }
       </div>
     }
@@ -114,6 +133,7 @@ interface UploadJob {
     .upload { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 0.5rem 0; }
     .job { display: grid; gap: 0.25rem; margin: 0.5rem 0; }
     .status { font-size: 0.85rem; }
+    .controls { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
     .toolbar.single { grid-template-columns: 1fr; }
     @media (max-width: 40rem) { .toolbar { grid-template-columns: 1fr; } }
   `],
@@ -130,6 +150,8 @@ export class FilesPage implements OnInit {
   protected readonly loading = signal(false);
   protected readonly problem = signal<string | null>(null);
   protected readonly jobs = signal<UploadJob[]>(FilesPage.restore());
+  /** Running uploads by job id, for pause, resume and cancel. */
+  private readonly tasks = new Map<string, UploadTask>();
   protected readonly bytes = formatBytes;
 
   private query = '';
@@ -138,16 +160,17 @@ export class FilesPage implements OnInit {
     // Finished uploads are remembered (without the File) so the list survives a reload.
     effect(() => {
       const done = this.jobs()
-        .filter((j) => j.result || j.error)
+        .filter((j) => j.result || j.error || j.cancelled)
         .slice(0, RECENT_MAX)
-        .map(({ name, target, percent, error, result }) => ({ name, target, percent, error, result }));
+        .map(({ id, name, target, percent, error, result }) => ({ id, name, target, percent, error, result }));
       sessionStorage.setItem(RECENT_KEY, JSON.stringify(done));
     });
   }
 
   private static restore(): UploadJob[] {
     try {
-      return JSON.parse(sessionStorage.getItem(RECENT_KEY) ?? '[]') as UploadJob[];
+      return (JSON.parse(sessionStorage.getItem(RECENT_KEY) ?? '[]') as UploadJob[])
+        .map((j) => ({ ...j, id: j.id ?? crypto.randomUUID() }));
     } catch {
       return [];
     }
@@ -207,15 +230,14 @@ export class FilesPage implements OnInit {
     const files = Array.from(input.files ?? []);
     input.value = '';
     const target = this.uploadTarget();
-    for (const file of files) {
-      const job: UploadJob = { name: file.name, file, target, percent: 0 };
-      this.jobs.update((j) => [job, ...j]);
-      await this.run(job);
-    }
+    const jobs = files.map((file): UploadJob => ({ id: crypto.randomUUID(), name: file.name, file, target, percent: 0 }));
+    this.jobs.update((j) => [...jobs, ...j]);
+    // Side by side, so pausing one does not hold up the others.
+    await Promise.all(jobs.map((job) => this.run(job)));
     this.load(true);
   }
 
-  /** "Preparing…", "Uploading 42% · 120 MB of 284 MB", "Finishing…". */
+  /** "Preparing…", "Uploading 42% · 120 MB of 284 MB", "Paused at 42% …", "Finishing…". */
   protected statusText(job: UploadJob): string {
     if (job.phase === 'preparing') {
       return 'Preparing…';
@@ -225,7 +247,23 @@ export class FilesPage implements OnInit {
     }
     const size = job.file?.size;
     const done = size ? ` · ${this.bytes(Math.round((size * job.percent) / 100))} of ${this.bytes(size)}` : '';
-    return `Uploading ${job.percent}%${done}`;
+    return job.phase === 'paused' ? `Paused at ${job.percent}%${done}` : `Uploading ${job.percent}%${done}`;
+  }
+
+  protected pausable(job: UploadJob): boolean {
+    return this.tasks.get(job.id)?.pausable ?? false;
+  }
+
+  protected pause(job: UploadJob): void {
+    this.tasks.get(job.id)?.pause();
+  }
+
+  protected resume(job: UploadJob): void {
+    this.tasks.get(job.id)?.resume();
+  }
+
+  protected cancel(job: UploadJob): void {
+    this.tasks.get(job.id)?.cancel();
   }
 
   protected async retry(job: UploadJob): Promise<void> {
@@ -234,23 +272,22 @@ export class FilesPage implements OnInit {
   }
 
   private async run(job: UploadJob): Promise<void> {
-    // Replace the entry with a fresh object on every change so the list re-renders.
-    let current = job;
-    const update = (patch: Partial<UploadJob>): void => {
-      const next = { ...current, ...patch };
-      this.jobs.update((j) => j.map((x) => (x === current ? next : x)));
-      current = next;
-    };
-    update({ percent: 0, phase: 'preparing', error: undefined, result: undefined });
     if (!job.file) {
       return;
     }
-    const file = job.file;
+    const update = (patch: Partial<UploadJob>): void =>
+      this.jobs.update((list) => list.map((x) => (x.id === job.id ? { ...x, ...patch } : x)));
+    update({ percent: 0, phase: 'preparing', error: undefined, result: undefined, cancelled: false });
+    const task = this.uploads.create(job.target, job.file, (p) => update({ percent: p.percent, phase: p.phase }));
+    this.tasks.set(job.id, task);
     try {
-      const result = await this.uploads.upload(job.target, file, (p) => update({ percent: p.percent, phase: p.phase }));
-      update({ result });
+      update({ result: await task.start() });
     } catch (e) {
-      update({ error: `${job.name}: ${describeError(ApiError.from(e))}` });
+      update(e instanceof UploadCancelled
+        ? { cancelled: true }
+        : { error: `${job.name}: ${describeError(ApiError.from(e))}` });
+    } finally {
+      this.tasks.delete(job.id);
     }
   }
 }

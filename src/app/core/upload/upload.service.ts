@@ -1,6 +1,6 @@
 import { HttpEventType } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { firstValueFrom } from 'rxjs';
+import { Subscription, firstValueFrom } from 'rxjs';
 import { ApiError } from '../api/api-error';
 import { DepotApi } from '../api/depot-api.service';
 import type { ObjectResult, PartTarget, Upload } from '../api/models';
@@ -11,17 +11,26 @@ const PART_CONCURRENCY = 3;
 const PART_ATTEMPTS = 3;
 
 /** What an upload is doing right now, for the progress display. */
-export type UploadPhase = 'preparing' | 'uploading' | 'finishing';
+export type UploadPhase = 'preparing' | 'uploading' | 'paused' | 'finishing';
 
 export interface UploadProgress {
   phase: UploadPhase;
-  /** 0-100; only meaningful while uploading. */
+  /** 0-100. */
   percent: number;
 }
 
 type ProgressFn = (p: UploadProgress) => void;
 
-/** Whole-file SHA-256 as lowercase hex, so the server can verify what it stored. */
+/** Thrown when the user cancels; callers show it as "Cancelled", not as an error. */
+export class UploadCancelled extends Error {
+  constructor() {
+    super('Upload cancelled');
+  }
+}
+
+/** Raised inside a part request when it was stopped on purpose (pause or cancel). */
+class Stopped extends Error {}
+
 async function sha256Hex(blob: Blob): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
@@ -36,133 +45,215 @@ async function sha256Base64(blob: Blob): Promise<string> {
 }
 
 /**
- * Uploads a file: up to 64 MiB in one request through the API, larger files in parts sent straight
- * to storage with presigned requests (create, send parts, complete). Progress is reported in bytes
- * as they leave the browser, for both paths.
+ * One file's upload. Up to 64 MiB goes in one request through the API (cancel only); larger files
+ * go in parts straight to storage and can be paused and resumed: resume asks the API which parts it
+ * already has (`GET /v1/uploads/{id}`) and sends only the missing ones.
  */
-@Injectable({ providedIn: 'root' })
-export class UploadService {
-  private readonly api = inject(DepotApi);
+export class UploadTask {
+  readonly pausable: boolean;
 
-  async upload(namespace: string, file: File, onProgress: ProgressFn): Promise<ObjectResult> {
-    return file.size <= SIMPLE_LIMIT
-      ? this.simple(namespace, file, onProgress)
-      : this.multipart(namespace, file, onProgress);
+  private paused = false;
+  private cancelled = false;
+  private resumeWaiter: (() => void) | null = null;
+  private readonly inflight = new Set<XMLHttpRequest>();
+  private simpleSub: Subscription | null = null;
+  private session: Upload | null = null;
+  private readonly sentByPart = new Map<number, number>();
+  private readonly etags = new Map<number, string>();
+
+  constructor(
+    private readonly api: DepotApi,
+    private readonly namespace: string,
+    readonly file: File,
+    private readonly onProgress: ProgressFn,
+  ) {
+    this.pausable = file.size > SIMPLE_LIMIT;
   }
 
-  private async simple(namespace: string, file: File, onProgress: ProgressFn): Promise<ObjectResult> {
-    onProgress({ phase: 'preparing', percent: 0 });
-    const sha = await sha256Hex(file);
-    onProgress({ phase: 'uploading', percent: 0 });
+  start(): Promise<ObjectResult> {
+    return this.pausable ? this.multipart() : this.simple();
+  }
+
+  pause(): void {
+    if (!this.pausable || this.paused || this.cancelled) {
+      return;
+    }
+    this.paused = true;
+    this.inflight.forEach((x) => x.abort());
+    this.onProgress({ phase: 'paused', percent: this.percent() });
+  }
+
+  resume(): void {
+    if (!this.paused || this.cancelled) {
+      return;
+    }
+    this.paused = false;
+    this.onProgress({ phase: 'uploading', percent: this.percent() });
+    this.resumeWaiter?.();
+    this.resumeWaiter = null;
+  }
+
+  cancel(): void {
+    if (this.cancelled) {
+      return;
+    }
+    this.cancelled = true;
+    this.inflight.forEach((x) => x.abort());
+    this.simpleSub?.unsubscribe();
+    this.resumeWaiter?.();
+    if (this.session) {
+      // Releases the reserved quota and the stored parts.
+      this.api.abortUpload(this.session.uploadId).subscribe({ error: () => undefined });
+    }
+  }
+
+  // ------------------------------------------------------------------ single request
+
+  private async simple(): Promise<ObjectResult> {
+    this.onProgress({ phase: 'preparing', percent: 0 });
+    const sha = await sha256Hex(this.file);
+    if (this.cancelled) {
+      throw new UploadCancelled();
+    }
+    this.onProgress({ phase: 'uploading', percent: 0 });
     return new Promise<ObjectResult>((resolve, reject) => {
-      this.api.uploadSimple(namespace, file, sha).subscribe({
+      this.simpleSub = this.api.uploadSimple(this.namespace, this.file, sha).subscribe({
         next: (event) => {
           if (event.type === HttpEventType.UploadProgress) {
-            const total = event.total ?? file.size;
+            const total = event.total ?? this.file.size;
             const percent = total > 0 ? Math.round((event.loaded / total) * 100) : 0;
-            // All bytes sent: the server is now storing and checking the file.
-            onProgress(percent >= 100 ? { phase: 'finishing', percent: 100 } : { phase: 'uploading', percent });
+            this.onProgress(percent >= 100 ? { phase: 'finishing', percent: 100 } : { phase: 'uploading', percent });
           } else if (event.type === HttpEventType.Response && event.body) {
             resolve(event.body.data);
           }
         },
         error: (e) => reject(ApiError.from(e)),
       });
+      // unsubscribe() on cancel ends the request without an error event; settle the promise here.
+      this.simpleSub.add(() => {
+        if (this.cancelled) {
+          reject(new UploadCancelled());
+        }
+      });
     });
   }
 
-  private async multipart(namespace: string, file: File, onProgress: ProgressFn): Promise<ObjectResult> {
-    onProgress({ phase: 'preparing', percent: 0 });
-    const session = await firstValueFrom(this.api.createUpload({
-      namespace,
-      filename: file.name,
-      contentType: file.type || 'application/octet-stream',
-      size: file.size,
+  // ------------------------------------------------------------------ multipart
+
+  private async multipart(): Promise<ObjectResult> {
+    this.onProgress({ phase: 'preparing', percent: 0 });
+    this.session = await firstValueFrom(this.api.createUpload({
+      namespace: this.namespace,
+      filename: this.file.name,
+      contentType: this.file.type || 'application/octet-stream',
+      size: this.file.size,
     }, crypto.randomUUID()));
-
-    // Bytes sent so far per part; the sum drives the percentage, so it moves smoothly.
-    const sentByPart = new Map<number, number>();
-    const report = (partNumber: number, loaded: number): void => {
-      sentByPart.set(partNumber, loaded);
-      let sent = 0;
-      sentByPart.forEach((v) => (sent += v));
-      onProgress({ phase: 'uploading', percent: Math.min(99, Math.floor((sent / file.size) * 100)) });
-    };
-
+    const session = this.session;
     try {
-      onProgress({ phase: 'uploading', percent: 0 });
-      const parts = session.mode === 'MULTIPART'
-        ? await this.sendParts(session, file, report)
-        : await this.sendWhole(session, file, report);
-      onProgress({ phase: 'finishing', percent: 100 });
+      let missing = Array.from({ length: session.partCount }, (_, i) => i + 1);
+      for (;;) {
+        if (this.cancelled) {
+          throw new UploadCancelled();
+        }
+        if (!this.paused) {
+          this.onProgress({ phase: 'uploading', percent: this.percent() });
+          await this.sendParts(session, missing);
+        }
+        if (this.cancelled) {
+          throw new UploadCancelled();
+        }
+        if (this.paused) {
+          await new Promise<void>((r) => (this.resumeWaiter = r));
+          // After a pause, trust the store: ask which parts it already holds.
+          missing = await this.missingParts(session);
+          continue;
+        }
+        if (this.etags.size === session.partCount) {
+          break;
+        }
+        missing = await this.missingParts(session);
+      }
+      this.onProgress({ phase: 'finishing', percent: 100 });
+      const parts = [...this.etags.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([partNumber, etag]) => ({ partNumber, etag }));
       return await firstValueFrom(this.api.completeUpload(session.uploadId, { parts }));
     } catch (e) {
-      // Release the reserved quota; the original failure is what the caller needs to see.
-      this.api.abortUpload(session.uploadId).subscribe({ error: () => undefined });
+      if (!(e instanceof UploadCancelled)) {
+        this.api.abortUpload(session.uploadId).subscribe({ error: () => undefined });
+      }
       throw e;
     }
   }
 
-  private async sendWhole(
-    session: Upload, file: File, report: (part: number, loaded: number) => void,
-  ): Promise<{ partNumber: number; etag: string }[]> {
-    if (!session.putUrl) {
-      throw new ApiError(0, 'UNKNOWN', 'The server returned no upload target.');
+  /** Parts the store does not have yet; records the ETags of those it has. */
+  private async missingParts(session: Upload): Promise<number[]> {
+    const status = await firstValueFrom(this.api.uploadStatus(session.uploadId));
+    for (const p of status.received) {
+      this.etags.set(p.partNumber, p.etag);
+      this.sentByPart.set(p.partNumber, p.size);
     }
-    await this.put(session.putUrl, file, (loaded) => report(1, loaded));
-    return [];
+    for (const n of status.missing) {
+      this.etags.delete(n);
+      this.sentByPart.set(n, 0);
+    }
+    return status.missing;
   }
 
-  private async sendParts(
-    session: Upload, file: File, report: (part: number, loaded: number) => void,
-  ): Promise<{ partNumber: number; etag: string }[]> {
-    // Each part's presigned request is signed with that part's SHA-256, so storage rejects damaged
-    // bytes. The checksum is computed per slice just before the part is sent (bounded memory).
-    const queue = Array.from({ length: session.partCount }, (_, i) => i + 1);
-    const done: { partNumber: number; etag: string }[] = [];
+  private async sendParts(session: Upload, numbers: number[]): Promise<void> {
+    const queue = [...numbers];
     const worker = async (): Promise<void> => {
-      for (let n = queue.shift(); n !== undefined; n = queue.shift()) {
-        const etag = await this.sendPart(session, file, n, report);
-        done.push({ partNumber: n, etag });
+      for (let n = queue.shift(); n !== undefined && !this.paused && !this.cancelled; n = queue.shift()) {
+        try {
+          this.etags.set(n, await this.sendPart(session, n));
+        } catch (e) {
+          if (e instanceof Stopped) {
+            return;                      // paused or cancelled; the outer loop decides what next
+          }
+          throw e;
+        }
       }
     };
     await Promise.all(Array.from({ length: PART_CONCURRENCY }, worker));
-    if (done.length !== session.partCount) {
-      throw new ApiError(0, 'UNKNOWN', `Only ${done.length} of ${session.partCount} parts were sent.`);
-    }
-    return done.sort((a, b) => a.partNumber - b.partNumber);
   }
 
-  private async sendPart(
-    session: Upload, file: File, partNumber: number, report: (part: number, loaded: number) => void,
-  ): Promise<string> {
+  private async sendPart(session: Upload, partNumber: number): Promise<string> {
     const start = (partNumber - 1) * session.partSize;
-    const body = file.slice(start, Math.min(start + session.partSize, file.size));
+    const body = this.file.slice(start, Math.min(start + session.partSize, this.file.size));
     const sha = await sha256Base64(body);
-    let current: PartTarget = await firstValueFrom(this.api.partTarget(session.uploadId, partNumber, sha));
+    let target: PartTarget = await firstValueFrom(this.api.partTarget(session.uploadId, partNumber, sha));
     for (let attempt = 1; ; attempt++) {
       try {
-        const etag = await this.put(current.request, body, (loaded) => report(partNumber, loaded));
+        const etag = await this.put(target.request, body, (loaded) => this.report(partNumber, loaded));
         if (!etag) {
           throw new ApiError(0, 'UNKNOWN',
             'Storage did not expose the part ETag. Allow the ETag header in the storage CORS rules.');
         }
         return etag;
       } catch (e) {
-        report(partNumber, 0);                  // this part starts again from zero
-        if (e instanceof ApiError || attempt >= PART_ATTEMPTS) {
+        this.report(partNumber, 0);
+        if (e instanceof Stopped || e instanceof ApiError || attempt >= PART_ATTEMPTS) {
           throw e;
         }
-        // The presigned URL may have expired; ask for a fresh one and try again.
-        current = await firstValueFrom(this.api.partTarget(session.uploadId, partNumber, sha));
+        target = await firstValueFrom(this.api.partTarget(session.uploadId, partNumber, sha));
       }
     }
   }
 
-  /**
-   * Sends one presigned request straight to storage with XMLHttpRequest, which (unlike fetch) reports
-   * upload progress. Resolves with the ETag header when storage exposes it.
-   */
+  private report(partNumber: number, loaded: number): void {
+    this.sentByPart.set(partNumber, loaded);
+    if (!this.paused && !this.cancelled) {
+      this.onProgress({ phase: 'uploading', percent: Math.min(99, this.percent()) });
+    }
+  }
+
+  private percent(): number {
+    let sent = 0;
+    this.sentByPart.forEach((v) => (sent += v));
+    return this.file.size > 0 ? Math.floor((sent / this.file.size) * 100) : 0;
+  }
+
+  /** One presigned request straight to storage with XHR (reports upload progress, can be aborted). */
   private put(
     request: { url: string; method: string; headers: Record<string, string> },
     body: Blob,
@@ -170,15 +261,17 @@ export class UploadService {
   ): Promise<string | null> {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
+      this.inflight.add(xhr);
+      const done = (): void => void this.inflight.delete(xhr);
       xhr.open(request.method, request.url);
       for (const [name, value] of Object.entries(request.headers ?? {})) {
-        // The browser sets these itself and refuses to have them set by script.
         if (!/^(host|content-length)$/i.test(name)) {
           xhr.setRequestHeader(name, value);
         }
       }
       xhr.upload.onprogress = (e) => onLoaded(e.loaded);
       xhr.onload = () => {
+        done();
         if (xhr.status >= 200 && xhr.status < 300) {
           onLoaded(body.size);
           resolve(xhr.getResponseHeader('ETag'));
@@ -186,9 +279,25 @@ export class UploadService {
           reject(new Error(`Storage answered ${xhr.status}`));
         }
       };
-      xhr.onerror = () => reject(new Error('Storage could not be reached'));
-      xhr.onabort = () => reject(new Error('Upload cancelled'));
+      xhr.onerror = () => {
+        done();
+        reject(new Error('Storage could not be reached'));
+      };
+      xhr.onabort = () => {
+        done();
+        reject(new Stopped());
+      };
       xhr.send(body);
     });
+  }
+}
+
+/** Creates upload tasks; one per file. */
+@Injectable({ providedIn: 'root' })
+export class UploadService {
+  private readonly api = inject(DepotApi);
+
+  create(namespace: string, file: File, onProgress: ProgressFn): UploadTask {
+    return new UploadTask(this.api, namespace, file, onProgress);
   }
 }
