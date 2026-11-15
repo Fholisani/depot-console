@@ -10,6 +10,7 @@ import { DepotApi } from '../../core/api/depot-api.service';
 import type { Namespace, ObjectResult, SearchHit } from '../../core/api/models';
 import { SessionService } from '../../core/tenant/session.service';
 import { UploadPhase, UploadService } from '../../core/upload/upload.service';
+import { hiddenObjects } from '../../core/ui/hidden-objects';
 import { describeError, formatBytes } from '../../core/ui/format';
 
 /** Recent uploads survive a reload for the rest of the browser session. */
@@ -184,7 +185,9 @@ export class FilesPage implements OnInit {
       cursor: reset ? undefined : (this.nextCursor() ?? undefined),
     }).subscribe({
       next: (r) => {
-        this.hits.set(reset ? r.items : [...this.hits(), ...r.items]);
+        const hidden = hiddenObjects();
+        const items = r.items.filter((h) => !hidden.has(h.objectId));
+        this.hits.set(reset ? items : [...this.hits(), ...items]);
         this.nextCursor.set(r.nextCursor ?? null);
         this.loading.set(false);
       },

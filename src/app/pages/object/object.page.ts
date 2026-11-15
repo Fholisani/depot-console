@@ -2,8 +2,9 @@ import { DatePipe } from '@angular/common';
 import { Component, inject, OnDestroy, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { HttpEventType } from '@angular/common/http';
-import { ActivatedRoute, RouterLink } from '@angular/router';
-import type { Observable } from 'rxjs';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { firstValueFrom, type Observable } from 'rxjs';
+import { hideObject, unhideObject } from '../../core/ui/hidden-objects';
 import {
   IonBadge, IonButton, IonCard, IonCardContent, IonCardHeader, IonCardTitle, IonInput, IonItem,
   IonLabel, IonList, IonNote, IonProgressBar, IonSelect, IonSelectOption, IonSpinner, IonText,
@@ -84,7 +85,16 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
             <ion-button (click)="undelete()" [disabled]="busy()">Undelete</ion-button>
           }
         }
+        @if (session.canManage() && o.status === 'DELETED') {
+          <ion-button color="danger" (click)="deleteForever()" [disabled]="busy()">Delete forever</ion-button>
+        }
       </div>
+      @if (o.status === 'DELETED') {
+        <ion-note>
+          This file is in the bin. Undelete it, or delete it forever to free its space now; otherwise
+          it is removed for good after the folder's recovery period.
+        </ion-note>
+      }
 
       @if (session.canWrite() && o.status === 'ACTIVE') {
         <ion-card>
@@ -161,6 +171,7 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
 export class ObjectPage implements OnInit, OnDestroy {
   private readonly api = inject(DepotApi);
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   protected readonly session = inject(SessionService);
 
   protected readonly id = this.route.snapshot.paramMap.get('id') ?? '';
@@ -274,11 +285,37 @@ export class ObjectPage implements OnInit, OnDestroy {
     if (!confirm('Delete this file? You can undelete it until its versions are purged.')) {
       return;
     }
-    this.run(() => this.api.deleteObject(this.id), () => this.done('File deleted.'));
+    this.run(() => this.api.deleteObject(this.id), () => {
+      hideObject(this.id);
+      this.done('File deleted.');
+    });
   }
 
   protected undelete(): void {
-    this.run(() => this.api.undeleteObject(this.id), () => this.done('File restored.'));
+    this.run(() => this.api.undeleteObject(this.id), () => {
+      unhideObject(this.id);
+      this.done('File restored.');
+    });
+  }
+
+  /** Purges every version of a deleted file, then returns to the list. Cannot be undone. */
+  protected async deleteForever(): Promise<void> {
+    if (!confirm('Delete this file forever? All its versions are removed and it cannot be recovered.')) {
+      return;
+    }
+    this.busy.set(true);
+    this.problem.set(null);
+    try {
+      for (const v of this.versions()) {
+        await firstValueFrom(this.api.purgeVersion(this.id, v.versionId));
+      }
+      hideObject(this.id);
+      await this.router.navigateByUrl('/app/files');
+    } catch (e) {
+      this.problem.set(describeError(ApiError.from(e), PROBLEMS));
+      this.busy.set(false);
+      this.reload();
+    }
   }
 
   protected restore(v: Version): void {
