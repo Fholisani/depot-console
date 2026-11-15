@@ -1,14 +1,26 @@
+// Height of the passive-slot banner. The page content is moved down by the same amount, so the
+// banner never covers the site header or the app toolbar (Ionic's router outlet fills the whole app).
+$banner-height: 2.25rem;
+
 .passive-banner {
-  position: sticky;
+  position: absolute;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 1000;
-  padding: 0.5rem 1rem;
+  box-sizing: border-box;
+  height: $banner-height;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0 1rem;
   background: #8a4b00;
   color: #fff;
   font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
 
   button {
-    margin-left: 1rem;
     color: inherit;
     background: transparent;
     border: 1px solid currentColor;
@@ -16,4 +28,8 @@
     padding: 0.1rem 0.6rem;
     cursor: pointer;
   }
+}
+
+.passive-banner ~ ion-router-outlet {
+  top: $banner-height;
 }
