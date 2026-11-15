@@ -38,6 +38,7 @@ export type SearchResults = Schemas['SearchResults'];
 export type Progress = Schemas['Progress'];
 export type ViewInfo = Schemas['ViewInfo'];
 export type Share = Schemas['Share'];
+export type ThumbnailInfo = Schemas['ThumbnailInfo'];
 export type SharedFile = Schemas['SharedFile'];
 export type LifecycleRule = Schemas['LifecycleRule'];
 export type LifecycleRuleBody = Schemas['LifecycleRuleBody'];

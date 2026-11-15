@@ -6,6 +6,7 @@ import {
   IonSelectOption, IonSpinner, IonText,
 } from '@ionic/angular';
 import { ApiError } from '../../core/api/api-error';
+import { FileTile } from './file-tile';
 import { DepotApi } from '../../core/api/depot-api.service';
 import type { Namespace, ObjectResult, SearchHit } from '../../core/api/models';
 import { SessionService } from '../../core/tenant/session.service';
@@ -34,7 +35,7 @@ interface UploadJob {
 @Component({
   selector: 'app-files',
   imports: [
-    DatePipe, RouterLink, IonButton, IonItem, IonLabel, IonList, IonNote, IonProgressBar, IonSearchbar,
+    DatePipe, FileTile, RouterLink, IonButton, IonItem, IonLabel, IonList, IonNote, IonProgressBar, IonSearchbar,
     IonSelect, IonSelectOption, IonSpinner, IonText,
   ],
   template: `
@@ -109,6 +110,19 @@ interface UploadJob {
     } @else if (hits().length === 0) {
       <p>No files found. New uploads can take a few seconds to appear in search.</p>
     } @else {
+      <div class="view-switch">
+        <ion-button size="small" fill="clear" [color]="grid() ? 'primary' : 'medium'" (click)="setGrid(true)"
+          aria-label="Show pictures">Pictures</ion-button>
+        <ion-button size="small" fill="clear" [color]="grid() ? 'medium' : 'primary'" (click)="setGrid(false)"
+          aria-label="Show list">List</ion-button>
+      </div>
+      @if (grid()) {
+        <div class="grid">
+          @for (hit of hits(); track hit.versionId) {
+            <app-file-tile [hit]="hit" />
+          }
+        </div>
+      } @else {
       <ion-list>
         @for (hit of hits(); track hit.versionId) {
           <ion-item [routerLink]="['/app/files', hit.objectId]" detail>
@@ -123,6 +137,7 @@ interface UploadJob {
           </ion-item>
         }
       </ion-list>
+      }
       @if (nextCursor()) {
         <ion-button fill="outline" (click)="load(false)" [disabled]="loading()">Load more</ion-button>
       }
@@ -134,6 +149,8 @@ interface UploadJob {
     .job { display: grid; gap: 0.25rem; margin: 0.5rem 0; }
     .status { font-size: 0.85rem; }
     .controls { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
+    .view-switch { display: flex; justify-content: flex-end; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: 0.75rem; margin: 0.5rem 0 1rem; }
     .toolbar.single { grid-template-columns: 1fr; }
     @media (max-width: 40rem) { .toolbar { grid-template-columns: 1fr; } }
   `],
@@ -153,6 +170,13 @@ export class FilesPage implements OnInit {
   /** Running uploads by job id, for pause, resume and cancel. */
   private readonly tasks = new Map<string, UploadTask>();
   protected readonly bytes = formatBytes;
+  /** Pictures (gallery) or list; remembered on this device. */
+  protected readonly grid = signal(localStorage.getItem('depot.filesView') !== 'list');
+
+  protected setGrid(on: boolean): void {
+    this.grid.set(on);
+    localStorage.setItem('depot.filesView', on ? 'grid' : 'list');
+  }
 
   private query = '';
 

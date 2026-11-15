@@ -8,7 +8,7 @@ import type {
   Envelope, FirstLogin, LifecyclePreview, LifecycleRule, LifecycleRuleBody, Namespace,
   NamespaceSettings, NewApiKey, ObjectResult, OnboardingStep, PartTarget, Progress, RestoreResult,
   SearchResults, SignupRequest, SignupResult, Tags, Upload, UploadStatus, UsageReport, Version,
-  Share, SharedFile, ViewInfo, Webhook, WebhookBody, WhoAmI,
+  Share, SharedFile, ThumbnailInfo, ViewInfo, Webhook, WebhookBody, WhoAmI,
 } from './models';
 
 export interface SearchQuery {
@@ -182,6 +182,11 @@ export class DepotApi {
   /** The kind of file and a short-lived URL for showing it in a photo or video player. */
   view(id: string, version?: string): Observable<ViewInfo> {
     return this.get<ViewInfo>(`/v1/objects/${id}/view${version ? `?version=${version}` : ''}`);
+  }
+
+  /** URL of a small preview picture; fails with 404 for files that have none. */
+  thumbnail(id: string): Observable<ThumbnailInfo> {
+    return this.get<ThumbnailInfo>(`/v1/objects/${id}/thumbnail`);
   }
 
   // ------------------------------------------------------------------ sharing

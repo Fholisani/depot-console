@@ -529,6 +529,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/objects/{id}/thumbnail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A small preview picture
+         * @description Returns a short-lived URL of a JPEG preview (longest side 480 px), made the first time it is asked
+         *     for and kept. Only JPEG, PNG, GIF and BMP photos have one; any other file answers 404, so the
+         *     client should show a generic tile. Previews are small and are not counted as egress.
+         */
+        get: operations["getThumbnail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/objects/{id}/undelete": {
         parameters: {
             query?: never;
@@ -1887,6 +1909,14 @@ export interface components {
         };
         SharedFileResponse: components["schemas"]["Envelope"] & {
             data?: components["schemas"]["SharedFile"];
+        };
+        ThumbnailInfo: {
+            url: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        ThumbnailInfoResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["ThumbnailInfo"];
         };
         ViewInfoResponse: components["schemas"]["Envelope"] & {
             data?: components["schemas"]["ViewInfo"];
@@ -3321,6 +3351,38 @@ export interface operations {
             307: components["responses"]["Redirect"];
             404: components["responses"]["NotFound"];
             416: components["responses"]["RangeNotSatisfiable"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getThumbnail: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                /** @description Object id. */
+                id: components["parameters"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The preview URL. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThumbnailInfoResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
         };
     };

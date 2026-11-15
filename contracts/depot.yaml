@@ -906,6 +906,31 @@ paths:
         '416': { $ref: '#/components/responses/RangeNotSatisfiable' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
 
+  /v1/objects/{id}/thumbnail:
+    get:
+      tags: [Objects]
+      operationId: getThumbnail
+      summary: A small preview picture
+      description: |
+        Returns a short-lived URL of a JPEG preview (longest side 480 px), made the first time it is asked
+        for and kept. Only JPEG, PNG, GIF and BMP photos have one; any other file answers 404, so the
+        client should show a generic tile. Previews are small and are not counted as egress.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/ObjectId'
+      responses:
+        '200':
+          description: The preview URL.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ThumbnailInfoResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
   /v1/objects/{id}/undelete:
     post:
       tags: [Versions]
@@ -2784,6 +2809,14 @@ components:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/Share' } } } }]
     SharedFileResponse:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/SharedFile' } } }]
+    ThumbnailInfo:
+      type: object
+      required: [url, expiresAt]
+      properties:
+        url: { type: string }
+        expiresAt: { type: string, format: date-time }
+    ThumbnailInfoResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/ThumbnailInfo' } } }]
     ViewInfoResponse:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/ViewInfo' } } }]
     SignupResponse:
