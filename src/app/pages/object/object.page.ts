@@ -12,7 +12,7 @@ import {
 } from '@ionic/angular';
 import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
-import type { DepotObject, Namespace, Progress, Version, ViewInfo } from '../../core/api/models';
+import type { DepotObject, Namespace, Progress, Share, Version, ViewInfo } from '../../core/api/models';
 import { SessionService } from '../../core/tenant/session.service';
 import { describeError, formatBytes } from '../../core/ui/format';
 
@@ -135,6 +135,38 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
         </ion-note>
       }
 
+      @if (session.canWrite() && o.status === 'ACTIVE' && o.latest?.status === 'READY') {
+        <ion-card>
+          <ion-card-header><ion-card-title>Share</ion-card-title></ion-card-header>
+          <ion-card-content>
+            <p class="muted">Anyone with the link can see and download this file. No account needed.</p>
+            <ion-input label="Add a note (optional)" labelPlacement="floating" maxlength="280"
+              [(ngModel)]="shareNote" placeholder="e.g. Our trip to the coast" />
+            <ion-select label="Link works for" labelPlacement="floating" [(ngModel)]="shareDays"
+              interface="popover">
+              <ion-select-option [value]="1">1 day</ion-select-option>
+              <ion-select-option [value]="7">7 days</ion-select-option>
+              <ion-select-option [value]="30">30 days</ion-select-option>
+              <ion-select-option [value]="0">Until I stop sharing</ion-select-option>
+            </ion-select>
+            <ion-button size="small" (click)="createShare()" [disabled]="busy()">Create link</ion-button>
+            @for (s of fileShares(); track s.id) {
+              <div class="share-row">
+                <code class="wrap">{{ shareUrl(s.token) }}</code>
+                <ion-note>
+                  {{ s.downloads }} {{ s.downloads === 1 ? 'download' : 'downloads' }}
+                  @if (s.expiresAt) { · until {{ s.expiresAt | date: 'd MMM y' }} } @else { · no end date }
+                </ion-note>
+                <div>
+                  <ion-button size="small" fill="clear" (click)="copyLink(s.token)">Copy link</ion-button>
+                  <ion-button size="small" fill="clear" color="danger" (click)="stopSharing(s.id)">Stop sharing</ion-button>
+                </div>
+              </div>
+            }
+          </ion-card-content>
+        </ion-card>
+      }
+
       @if (session.canWrite() && o.status === 'ACTIVE') {
         <ion-card>
           <ion-card-header><ion-card-title>Tags</ion-card-title></ion-card-header>
@@ -204,6 +236,8 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
     .viewer img, .viewer video { max-width: 100%; max-height: 70vh; display: block; margin: 0 auto; }
     .viewer audio { width: 100%; background: #fff; }
     .noview { display: block; margin: 0.75rem 0; }
+    .share-row { display: grid; gap: 0.15rem; margin-top: 0.9rem; padding-top: 0.6rem; border-top: 1px solid var(--ion-color-light-shade); }
+    .muted { color: var(--ion-color-medium); }
     .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .dl { display: grid; gap: 0.25rem; margin: 0.75rem 0; font-size: 0.85rem; }
     .dl-controls { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
@@ -238,6 +272,9 @@ export class ObjectPage implements OnInit, OnDestroy {
   protected readonly message = signal<string | null>(null);
   protected readonly bytes = formatBytes;
   protected copyTarget = '';
+  protected shareNote = '';
+  protected shareDays = 7;
+  protected readonly fileShares = signal<Share[]>([]);
 
   private timer?: ReturnType<typeof setTimeout>;
 
@@ -262,11 +299,57 @@ export class ObjectPage implements OnInit, OnDestroy {
         });
         this.watchProgress(o);
         this.loadView(o);
+        if (this.session.canWrite() && o.status === 'ACTIVE') {
+          this.loadShares();
+        }
       },
       error: (e: ApiError) => {
         this.problem.set(describeError(e, PROBLEMS));
         this.loading.set(false);
       },
+    });
+  }
+
+  protected shareUrl(token: string): string {
+    return new URL(`s/${token}`, document.baseURI).href;
+  }
+
+  private loadShares(): void {
+    this.api.shares().subscribe({
+      next: (all) => this.fileShares.set(all.filter((s) => s.objectId === this.id)),
+      error: () => undefined,
+    });
+  }
+
+  protected createShare(): void {
+    const note = this.shareNote.trim();
+    this.run(() => this.api.createShare(this.id, note || null, this.shareDays || null), (s) => {
+      this.shareNote = '';
+      void this.copyLink(s.token);
+      this.loadShares();
+    });
+  }
+
+  protected async copyLink(token: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(this.shareUrl(token));
+      this.message.set('Link copied. Paste it in a message to share.');
+    } catch {
+      this.message.set(`Your link: ${this.shareUrl(token)}`);
+    }
+  }
+
+  protected async stopSharing(shareId: string): Promise<void> {
+    if (!await this.confirm.ask({
+      header: 'Stop sharing?',
+      message: 'The link stops working straight away for everyone who has it.',
+      confirmText: 'Stop sharing', destructive: true,
+    })) {
+      return;
+    }
+    this.run(() => this.api.revokeShare(shareId), () => {
+      this.message.set('Sharing stopped.');
+      this.loadShares();
     });
   }
 

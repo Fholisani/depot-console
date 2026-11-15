@@ -431,6 +431,104 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/objects/{id}/shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Share a file with a link
+         * @description Creates a link that anyone can open to see and download this file without signing in. Downloads
+         *     count against the owner's monthly allowance. Optional `description` (up to 280 characters) and
+         *     `expiresInDays` (1 to 3650; omit for a link that does not expire).
+         */
+        post: operations["createShare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Active share links */
+        get: operations["listShares"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shares/{shareId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Stop sharing */
+        delete: operations["revokeShare"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/share/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Details of a shared file
+         * @description No sign-in. Tells a visitor what they are about to open: name, size, type, an optional description,
+         *     who shared it and when the link expires. Unknown, revoked and expired links answer 404.
+         */
+        get: operations["getSharedFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/share/{token}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The shared file
+         * @description No sign-in. Same delivery modes and headers as `downloadObject`. With `download=true` the request
+         *     counts as a download of the link and is sent as an attachment.
+         */
+        get: operations["downloadSharedFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/objects/{id}/undelete": {
         parameters: {
             query?: never;
@@ -1750,6 +1848,46 @@ export interface components {
             /** Format: date-time */
             expiresAt?: string | null;
         };
+        Share: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            objectId: string;
+            filename: string;
+            /** @description The secret part of the link; treat it like a password. */
+            token: string;
+            description?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt?: string | null;
+            /** Format: int64 */
+            downloads: number;
+        };
+        SharedFile: {
+            filename: string;
+            /** Format: int64 */
+            size: number;
+            contentType: string;
+            /** @enum {string} */
+            kind: "image" | "video" | "audio" | "pdf" | "other";
+            description?: string | null;
+            /** @description The owner's display name */
+            sharedBy?: string;
+            /** Format: date-time */
+            sharedAt: string;
+            /** Format: date-time */
+            expiresAt?: string | null;
+        };
+        ShareResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["Share"];
+        };
+        ShareListResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["Share"][];
+        };
+        SharedFileResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["SharedFile"];
+        };
         ViewInfoResponse: components["schemas"]["Envelope"] & {
             data?: components["schemas"]["ViewInfo"];
         };
@@ -3038,6 +3176,151 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    createShare: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                /** @description Object id. */
+                id: components["parameters"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    description?: string | null;
+                    expiresInDays?: number | null;
+                };
+            };
+        };
+        responses: {
+            /** @description The link. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShareResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listShares: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Links that are not revoked or expired, newest first. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShareListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    revokeShare: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link no longer works. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getSharedFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The details. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedFileResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    downloadSharedFile: {
+        parameters: {
+            query?: {
+                /** @description `redirect`: 307 to a presigned URL. `proxy`: stream through the service. */
+                mode?: components["parameters"]["DownloadMode"];
+                download?: boolean;
+            };
+            header?: {
+                /** @description A single byte range (`bytes=0-1023`, `bytes=1024-`, `bytes=-500`). `mode=proxy` only. */
+                Range?: components["parameters"]["Range"];
+                /** @description Send the full content instead of the range when this ETag is stale. */
+                "If-Range"?: components["parameters"]["IfRange"];
+                /** @description Answers `304` when it matches the version's ETag. */
+                "If-None-Match"?: components["parameters"]["IfNoneMatch"];
+            };
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Content"];
+            206: components["responses"]["PartialContent"];
+            304: components["responses"]["NotModified"];
+            307: components["responses"]["Redirect"];
+            404: components["responses"]["NotFound"];
+            416: components["responses"]["RangeNotSatisfiable"];
             429: components["responses"]["TooManyRequests"];
         };
     };

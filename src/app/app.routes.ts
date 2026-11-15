@@ -11,6 +11,7 @@ export const routes: Routes = [
       { path: 'pricing', loadComponent: () => import('./pages/pricing/pricing.page').then((m) => m.PricingPage) },
       { path: 'docs', loadComponent: () => import('./pages/docs/docs.page').then((m) => m.DocsPage) },
       { path: 'signup', loadComponent: () => import('./pages/signup/signup.page').then((m) => m.SignupPage) },
+      { path: 's/:token', loadComponent: () => import('./pages/share/share.page').then((m) => m.SharePage) },
       {
         path: 'verify-email',
         loadComponent: () => import('./pages/verify-email/verify-email.page').then((m) => m.VerifyEmailPage),

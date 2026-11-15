@@ -106,6 +106,8 @@ tags:
     description: Signed HTTP callbacks for object events.
   - name: Usage
     description: Storage, traffic and plan limits for the tenant.
+  - name: Sharing
+    description: Links that let anyone view and download one file without signing in.
   - name: Public
     description: Unauthenticated reads from namespaces marked public.
   - name: Operator
@@ -781,6 +783,127 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /v1/objects/{id}/shares:
+    post:
+      tags: [Sharing]
+      operationId: createShare
+      summary: Share a file with a link
+      description: |
+        Creates a link that anyone can open to see and download this file without signing in. Downloads
+        count against the owner's monthly allowance. Optional `description` (up to 280 characters) and
+        `expiresInDays` (1 to 3650; omit for a link that does not expire).
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/ObjectId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description: { type: [string, 'null'], maxLength: 280 }
+                expiresInDays: { type: [integer, 'null'], minimum: 1, maximum: 3650 }
+      responses:
+        '201':
+          description: The link.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShareResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/shares:
+    get:
+      tags: [Sharing]
+      operationId: listShares
+      summary: Active share links
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+      responses:
+        '200':
+          description: Links that are not revoked or expired, newest first.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShareListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/shares/{shareId}:
+    delete:
+      tags: [Sharing]
+      operationId: revokeShare
+      summary: Stop sharing
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - name: shareId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: The link no longer works. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/share/{token}:
+    get:
+      tags: [Sharing]
+      operationId: getSharedFile
+      summary: Details of a shared file
+      description: |
+        No sign-in. Tells a visitor what they are about to open: name, size, type, an optional description,
+        who shared it and when the link expires. Unknown, revoked and expired links answer 404.
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The details.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SharedFileResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/share/{token}/content:
+    get:
+      tags: [Sharing]
+      operationId: downloadSharedFile
+      summary: The shared file
+      description: |
+        No sign-in. Same delivery modes and headers as `downloadObject`. With `download=true` the request
+        counts as a download of the link and is sent as an attachment.
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/DownloadMode'
+        - name: download
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+        - $ref: '#/components/parameters/Range'
+        - $ref: '#/components/parameters/IfRange'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200': { $ref: '#/components/responses/Content' }
+        '206': { $ref: '#/components/responses/PartialContent' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '307': { $ref: '#/components/responses/Redirect' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '416': { $ref: '#/components/responses/RangeNotSatisfiable' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /v1/objects/{id}/undelete:
@@ -2629,7 +2752,38 @@ components:
         url: { type: [string, 'null'], description: Short-lived URL for use in img/video; null for kind other. }
         expiresAt: { type: [string, 'null'], format: date-time }
 
+    Share:
+      type: object
+      required: [id, objectId, filename, token, createdAt, downloads]
+      properties:
+        id: { type: string, format: uuid }
+        objectId: { type: string, format: uuid }
+        filename: { type: string }
+        token: { type: string, description: The secret part of the link; treat it like a password. }
+        description: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        downloads: { type: integer, format: int64 }
+    SharedFile:
+      type: object
+      required: [filename, size, contentType, kind, sharedAt]
+      properties:
+        filename: { type: string }
+        size: { type: integer, format: int64 }
+        contentType: { type: string }
+        kind: { type: string, enum: [image, video, audio, pdf, other] }
+        description: { type: [string, 'null'] }
+        sharedBy: { type: string, description: The owner's display name, never an email address. }
+        sharedAt: { type: string, format: date-time }
+        expiresAt: { type: [string, 'null'], format: date-time }
+
     # -------------------------------------------------------------- typed envelopes
+    ShareResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/Share' } } }]
+    ShareListResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/Share' } } } }]
+    SharedFileResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/SharedFile' } } }]
     ViewInfoResponse:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/ViewInfo' } } }]
     SignupResponse:

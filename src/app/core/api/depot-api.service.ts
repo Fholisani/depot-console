@@ -8,7 +8,7 @@ import type {
   Envelope, FirstLogin, LifecyclePreview, LifecycleRule, LifecycleRuleBody, Namespace,
   NamespaceSettings, NewApiKey, ObjectResult, OnboardingStep, PartTarget, Progress, RestoreResult,
   SearchResults, SignupRequest, SignupResult, Tags, Upload, UploadStatus, UsageReport, Version,
-  ViewInfo, Webhook, WebhookBody, WhoAmI,
+  Share, SharedFile, ViewInfo, Webhook, WebhookBody, WhoAmI,
 } from './models';
 
 export interface SearchQuery {
@@ -182,6 +182,30 @@ export class DepotApi {
   /** The kind of file and a short-lived URL for showing it in a photo or video player. */
   view(id: string, version?: string): Observable<ViewInfo> {
     return this.get<ViewInfo>(`/v1/objects/${id}/view${version ? `?version=${version}` : ''}`);
+  }
+
+  // ------------------------------------------------------------------ sharing
+
+  createShare(id: string, description: string | null, expiresInDays: number | null): Observable<Share> {
+    return this.send<Share>('POST', `/v1/objects/${id}/shares`, { description, expiresInDays });
+  }
+
+  shares(): Observable<Share[]> {
+    return this.get<Share[]>('/v1/shares');
+  }
+
+  revokeShare(shareId: string): Observable<void> {
+    return this.send<void>('DELETE', `/v1/shares/${shareId}`);
+  }
+
+  /** Public (no sign-in): what a visitor is about to open. */
+  sharedFile(token: string): Observable<SharedFile> {
+    return this.get<SharedFile>(`/v1/share/${encodeURIComponent(token)}`);
+  }
+
+  /** Public URL of a shared file's bytes, for img/video sources and the Download button. */
+  sharedContentUrl(token: string, download = false): string {
+    return this.url(`/v1/share/${encodeURIComponent(token)}/content${download ? '?download=true' : ''}`);
   }
 
   progress(id: string): Observable<Progress> {
