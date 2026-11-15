@@ -11,7 +11,12 @@ const PART_CONCURRENCY = 3;
 const PART_ATTEMPTS = 3;
 
 /** What an upload is doing right now, for the progress display. */
-export type UploadPhase = 'preparing' | 'uploading' | 'paused' | 'finishing';
+/**
+ * `pausing`: pause was requested and the parts already on the wire are still finishing. They are not
+ * aborted, because storage cannot keep half a part: aborting would throw their bytes away and resume
+ * would start those parts again.
+ */
+export type UploadPhase = 'preparing' | 'uploading' | 'pausing' | 'paused' | 'finishing';
 
 export interface UploadProgress {
   phase: UploadPhase;
@@ -28,7 +33,7 @@ export class UploadCancelled extends Error {
   }
 }
 
-/** Raised inside a part request when it was stopped on purpose (pause or cancel). */
+/** Raised inside a part request when it was stopped on purpose (cancel). */
 class Stopped extends Error {}
 
 async function sha256Hex(blob: Blob): Promise<string> {
@@ -78,9 +83,11 @@ export class UploadTask {
     if (!this.pausable || this.paused || this.cancelled) {
       return;
     }
+    // Stop starting new parts but let the ones already sending finish: a part is all-or-nothing in
+    // storage, so aborting it loses every byte sent so far. The multipart loop reports `paused`
+    // once the last in-flight part is done.
     this.paused = true;
-    this.inflight.forEach((x) => x.abort());
-    this.onProgress({ phase: 'paused', percent: this.percent() });
+    this.onProgress({ phase: this.inflight.size > 0 ? 'pausing' : 'paused', percent: this.percent() });
   }
 
   resume(): void {
@@ -163,6 +170,7 @@ export class UploadTask {
           throw new UploadCancelled();
         }
         if (this.paused) {
+          this.onProgress({ phase: 'paused', percent: this.percent() });
           await new Promise<void>((r) => (this.resumeWaiter = r));
           // After a pause, trust the store: ask which parts it already holds.
           missing = await this.missingParts(session);
@@ -208,7 +216,7 @@ export class UploadTask {
           this.etags.set(n, await this.sendPart(session, n));
         } catch (e) {
           if (e instanceof Stopped) {
-            return;                      // paused or cancelled; the outer loop decides what next
+            return;                      // cancelled (pause no longer aborts); the outer loop decides
           }
           throw e;
         }
@@ -242,8 +250,8 @@ export class UploadTask {
 
   private report(partNumber: number, loaded: number): void {
     this.sentByPart.set(partNumber, loaded);
-    if (!this.paused && !this.cancelled) {
-      this.onProgress({ phase: 'uploading', percent: Math.min(99, this.percent()) });
+    if (!this.cancelled) {
+      this.onProgress({ phase: this.paused ? 'pausing' : 'uploading', percent: Math.min(99, this.percent()) });
     }
   }
 

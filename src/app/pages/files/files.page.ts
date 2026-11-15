@@ -80,8 +80,8 @@ interface UploadJob {
         } @else if (job.result; as r) {
           <a [routerLink]="['/app/files', r.objectId]">Uploaded · {{ r.status }}</a>
         } @else {
-          @if (job.phase === 'uploading' || job.phase === 'paused') {
-            <ion-progress-bar [value]="job.percent / 100" [color]="job.phase === 'paused' ? 'medium' : 'primary'"
+          @if (job.phase === 'uploading' || job.phase === 'pausing' || job.phase === 'paused') {
+            <ion-progress-bar [value]="job.percent / 100" [color]="job.phase === 'paused' || job.phase === 'pausing' ? 'medium' : 'primary'"
               [attr.aria-label]="'Uploading ' + job.name" />
           } @else {
             <ion-progress-bar type="indeterminate" [attr.aria-label]="'Uploading ' + job.name" />
@@ -91,7 +91,7 @@ interface UploadJob {
             @if (pausable(job) && job.phase === 'uploading') {
               <ion-button size="small" fill="clear" (click)="pause(job)">Pause</ion-button>
             }
-            @if (job.phase === 'paused') {
+            @if (isPaused(job)) {
               <ion-button size="small" fill="clear" (click)="resume(job)">Resume</ion-button>
             }
             @if (job.phase !== 'finishing') {
@@ -271,7 +271,15 @@ export class FilesPage implements OnInit {
     }
     const size = job.file?.size;
     const done = size ? ` · ${this.bytes(Math.round((size * job.percent) / 100))} of ${this.bytes(size)}` : '';
+    if (job.phase === 'pausing') {
+      return `Pausing… finishing the parts already sending (${job.percent}%${done.replace(' · ', ', ')})`;
+    }
     return job.phase === 'paused' ? `Paused at ${job.percent}%${done}` : `Uploading ${job.percent}%${done}`;
+  }
+
+  /** Paused, or pause requested and the parts already sending are still finishing. */
+  protected isPaused(job: UploadJob): boolean {
+    return job.phase === 'paused' || job.phase === 'pausing';
   }
 
   protected pausable(job: UploadJob): boolean {
