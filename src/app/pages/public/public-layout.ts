@@ -23,7 +23,7 @@ import { APP_CONFIG } from '../../core/config/app-config';
           </nav>
           <div class="actions">
             @if (signedIn()) {
-              <ion-button routerLink="/app">Open console</ion-button>
+              <ion-button routerLink="/app/files">My files</ion-button>
             } @else {
               <ion-button fill="clear" (click)="signIn()">Sign in</ion-button>
               <ion-button routerLink="/signup">Get started</ion-button>
