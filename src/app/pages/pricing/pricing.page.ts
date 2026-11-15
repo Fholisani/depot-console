@@ -57,7 +57,7 @@ interface Pricing {
         </div>
         @if (p.note) { <p class="muted note">{{ p.note }}</p> }
       } @else if (failed()) {
-        <p class="muted">Pricing could not be loaded. The free plan includes 5 GB of storage.</p>
+        <p class="muted">Pricing could not be loaded. The free plan includes 10 GB of storage.</p>
       } @else {
         <ion-spinner name="crescent" aria-label="Loading pricing" />
       }

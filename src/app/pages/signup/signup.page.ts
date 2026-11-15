@@ -74,7 +74,7 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
           @if (problem()) { <ion-text color="danger"><p role="alert">{{ problem() }}</p></ion-text> }
         } @else {
           <h1>Create your account</h1>
-          <p class="muted sub">5 GB free. No card needed.</p>
+          <p class="muted sub">10 GB free. No card needed.</p>
           <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
             <ion-item>
               <ion-input label="Email" labelPlacement="stacked" type="email" formControlName="email"

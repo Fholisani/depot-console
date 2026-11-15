@@ -12,7 +12,7 @@ import { IonButton } from '@ionic/angular';
         <h1>Never delete a memory<br />to make space again.</h1>
         <p class="lead muted">Your photos, videos and documents, kept safe in full quality.</p>
         <ion-button size="large" routerLink="/signup">Start free</ion-button>
-        <p class="muted small">5 GB free · No card needed</p>
+        <p class="muted small">10 GB free · No card needed</p>
       </div>
     </section>
 
