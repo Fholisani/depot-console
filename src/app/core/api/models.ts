@@ -36,6 +36,7 @@ export type Tags = Schemas['Tags'];
 export type SearchHit = Schemas['SearchHit'];
 export type SearchResults = Schemas['SearchResults'];
 export type Progress = Schemas['Progress'];
+export type ViewInfo = Schemas['ViewInfo'];
 export type LifecycleRule = Schemas['LifecycleRule'];
 export type LifecycleRuleBody = Schemas['LifecycleRuleBody'];
 export type LifecyclePreview = Schemas['LifecyclePreview'];

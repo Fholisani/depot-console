@@ -8,7 +8,7 @@ import type {
   Envelope, FirstLogin, LifecyclePreview, LifecycleRule, LifecycleRuleBody, Namespace,
   NamespaceSettings, NewApiKey, ObjectResult, OnboardingStep, PartTarget, Progress, RestoreResult,
   SearchResults, SignupRequest, SignupResult, Tags, Upload, UploadStatus, UsageReport, Version,
-  Webhook, WebhookBody, WhoAmI,
+  ViewInfo, Webhook, WebhookBody, WhoAmI,
 } from './models';
 
 export interface SearchQuery {
@@ -177,6 +177,11 @@ export class DepotApi {
 
   copyObject(id: string, namespace: string, externalRef?: string): Observable<CopyResult> {
     return this.send<CopyResult>('POST', `/v1/objects/${id}/copy`, { namespace, externalRef });
+  }
+
+  /** The kind of file and a short-lived URL for showing it in a photo or video player. */
+  view(id: string, version?: string): Observable<ViewInfo> {
+    return this.get<ViewInfo>(`/v1/objects/${id}/view${version ? `?version=${version}` : ''}`);
   }
 
   progress(id: string): Observable<Progress> {

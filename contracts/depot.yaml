@@ -753,6 +753,36 @@ paths:
         '500': { $ref: '#/components/responses/InternalError' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
+  /v1/objects/{id}/view:
+    get:
+      tags: [Objects]
+      operationId: viewObject
+      summary: What a viewer needs to show a file
+      description: |
+        Returns the kind of file (`image`, `video`, `audio`, `pdf` or `other`) and a short-lived URL that
+        can be used directly in `<img>` and `<video>` (range requests work). The kind is derived from the
+        file extension when the stored type is generic, for example `.LRF`. For `other`, and for active
+        content types, no URL is returned and the client should offer a download. Counts against egress.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - $ref: '#/components/parameters/ObjectId'
+        - name: version
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The view information.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ViewInfoResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
   /v1/objects/{id}/undelete:
     post:
       tags: [Versions]
@@ -2185,8 +2215,15 @@ components:
         request: { $ref: '#/components/schemas/PresignedRequest' }
     PartRequest:
       type: object
+      required: [sha256]
       properties:
-        sha256: { type: string, contentEncoding: base64, description: Base64 SHA-256 of the part. }
+        sha256:
+          type: string
+          contentEncoding: base64
+          description: |
+            Base64 SHA-256 of the part (32 bytes). Required: it is signed into the presigned request,
+            so storage rejects bytes that do not match. Send it back as the `x-amz-checksum-sha256`
+            header given in `request.headers`.
     UploadSessionStatus:
       type: string
       enum: [OPEN, COMPLETED, ABORTED, EXPIRED]
@@ -2579,7 +2616,22 @@ components:
         error: { type: string }
         at: { type: string, format: date-time }
 
+    ViewInfo:
+      type: object
+      required: [objectId, versionId, filename, contentType, kind, size]
+      properties:
+        objectId: { type: string, format: uuid }
+        versionId: { type: string, format: uuid }
+        filename: { type: string }
+        contentType: { type: string }
+        kind: { type: string, enum: [image, video, audio, pdf, other] }
+        size: { type: integer, format: int64 }
+        url: { type: [string, 'null'], description: Short-lived URL for use in img/video; null for kind other. }
+        expiresAt: { type: [string, 'null'], format: date-time }
+
     # -------------------------------------------------------------- typed envelopes
+    ViewInfoResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/ViewInfo' } } }]
     SignupResponse:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/SignupResult' } } }]
     MessageResponse:

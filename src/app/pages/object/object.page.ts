@@ -12,7 +12,7 @@ import {
 } from '@ionic/angular';
 import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
-import type { DepotObject, Namespace, Progress, Version } from '../../core/api/models';
+import type { DepotObject, Namespace, Progress, Version, ViewInfo } from '../../core/api/models';
 import { SessionService } from '../../core/tenant/session.service';
 import { describeError, formatBytes } from '../../core/ui/format';
 
@@ -84,6 +84,33 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
             <ion-button size="small" fill="clear" color="medium" (click)="cancelDownload()">Cancel</ion-button>
           </div>
         </div>
+      }
+
+      @if (view(); as v) {
+        @if (v.url && !cannotPlay()) {
+          <div class="viewer">
+            @switch (v.kind) {
+              @case ('image') {
+                <img [src]="v.url" [alt]="v.filename" (error)="cannotPlay.set(true)" />
+              }
+              @case ('video') {
+                <video [src]="v.url" controls playsinline preload="metadata"
+                  (error)="cannotPlay.set(true)"></video>
+              }
+              @case ('audio') {
+                <audio [src]="v.url" controls (error)="cannotPlay.set(true)"></audio>
+              }
+              @case ('pdf') {
+                <ion-button fill="outline" [href]="v.url" target="_blank" rel="noopener">Open PDF</ion-button>
+              }
+            }
+          </div>
+        } @else if (cannotPlay()) {
+          <ion-note class="noview">
+            Your browser can't show this {{ v.kind === 'video' ? 'video' : 'file' }} here, but it is safe.
+            Download it to open it on your device.
+          </ion-note>
+        }
       }
 
       <div class="actions">
@@ -173,6 +200,10 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
     }
   `,
   styles: [`
+    .viewer { margin: 0.75rem 0; background: #000; border-radius: 12px; overflow: hidden; text-align: center; }
+    .viewer img, .viewer video { max-width: 100%; max-height: 70vh; display: block; margin: 0 auto; }
+    .viewer audio { width: 100%; background: #fff; }
+    .noview { display: block; margin: 0.75rem 0; }
     .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .dl { display: grid; gap: 0.25rem; margin: 0.75rem 0; font-size: 0.85rem; }
     .dl-controls { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
@@ -199,6 +230,8 @@ export class ObjectPage implements OnInit, OnDestroy {
   private dl: { name: string; versionId?: string; total: number } | null = null;
   private dlChunks: Blob[] = [];
   private dlSub: Subscription | null = null;
+  protected readonly view = signal<ViewInfo | null>(null);
+  protected readonly cannotPlay = signal(false);
   protected readonly loading = signal(true);
   protected readonly busy = signal(false);
   protected readonly problem = signal<string | null>(null);
@@ -228,12 +261,22 @@ export class ObjectPage implements OnInit, OnDestroy {
           error: () => undefined,
         });
         this.watchProgress(o);
+        this.loadView(o);
       },
       error: (e: ApiError) => {
         this.problem.set(describeError(e, PROBLEMS));
         this.loading.set(false);
       },
     });
+  }
+
+  /** Asks for the viewer URL once the file is ready; failures just mean no preview. */
+  private loadView(o: DepotObject): void {
+    const ready = o.status === 'ACTIVE' && o.latest?.status === 'READY' && !this.view();
+    if (!ready) {
+      return;
+    }
+    this.api.view(this.id).subscribe({ next: (v) => this.view.set(v), error: () => undefined });
   }
 
   /** Polls while the current version is still uploading or being verified. */

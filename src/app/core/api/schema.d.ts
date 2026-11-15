@@ -408,6 +408,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/objects/{id}/view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a viewer needs to show a file
+         * @description Returns the kind of file (`image`, `video`, `audio`, `pdf` or `other`) and a short-lived URL that
+         *     can be used directly in `<img>` and `<video>` (range requests work). The kind is derived from the
+         *     file extension when the stored type is generic, for example `.LRF`. For `other`, and for active
+         *     content types, no URL is returned and the client should offer a download. Counts against egress.
+         */
+        get: operations["viewObject"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/objects/{id}/undelete": {
         parameters: {
             query?: never;
@@ -1308,8 +1331,12 @@ export interface components {
             request: components["schemas"]["PresignedRequest"];
         };
         PartRequest: {
-            /** @description Base64 SHA-256 of the part. */
-            sha256?: string;
+            /**
+             * @description Base64 SHA-256 of the part (32 bytes). Required: it is signed into the presigned request,
+             *     so storage rejects bytes that do not match. Send it back as the `x-amz-checksum-sha256`
+             *     header given in `request.headers`.
+             */
+            sha256: string;
         };
         /** @enum {string} */
         UploadSessionStatus: "OPEN" | "COMPLETED" | "ABORTED" | "EXPIRED";
@@ -1706,6 +1733,25 @@ export interface components {
             error: string;
             /** Format: date-time */
             at: string;
+        };
+        ViewInfo: {
+            /** Format: uuid */
+            objectId: string;
+            /** Format: uuid */
+            versionId: string;
+            filename: string;
+            contentType: string;
+            /** @enum {string} */
+            kind: "image" | "video" | "audio" | "pdf" | "other";
+            /** Format: int64 */
+            size: number;
+            /** @description Short-lived URL for use in img/video; null for kind other. */
+            url?: string | null;
+            /** Format: date-time */
+            expiresAt?: string | null;
+        };
+        ViewInfoResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["ViewInfo"];
         };
         SignupResponse: components["schemas"]["Envelope"] & {
             data?: components["schemas"]["SignupResult"];
@@ -2959,6 +3005,40 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    viewObject: {
+        parameters: {
+            query?: {
+                version?: string;
+            };
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                /** @description Object id. */
+                id: components["parameters"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The view information. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ViewInfoResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
         };
     };
     undeleteObject: {
