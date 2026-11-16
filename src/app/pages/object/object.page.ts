@@ -15,6 +15,7 @@ import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
 import type { AlbumRef, DepotObject, Namespace, Progress, Share, Version, ViewInfo } from '../../core/api/models';
 import { linkStats } from '../../core/ui/media';
+import { canShareNatively, fileMessage, messageText, shareNatively, type ShareMessage } from '../../core/ui/share-message';
 import { SessionService } from '../../core/tenant/session.service';
 import { describeError, formatBytes } from '../../core/ui/format';
 
@@ -172,7 +173,10 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
                   @if (s.expiresAt) { · until {{ s.expiresAt | date: 'd MMM y' }} } @else { · no end date }
                 </ion-note>
                 <div>
-                  <ion-button size="small" fill="clear" (click)="copyLink(s.token)">Copy link</ion-button>
+                  @if (canShare) {
+                    <ion-button size="small" (click)="shareSheet(s)">Share…</ion-button>
+                  }
+                  <ion-button size="small" fill="clear" (click)="copyLink(s)">Copy message</ion-button>
                   <ion-button size="small" fill="clear" color="danger" (click)="stopSharing(s.id)">Stop sharing</ion-button>
                 </div>
               </div>
@@ -293,6 +297,7 @@ export class ObjectPage implements OnInit, OnDestroy {
   protected readonly fileShares = signal<Share[]>([]);
   protected readonly inAlbums = signal<AlbumRef[]>([]);
   protected readonly stats = (s: Share): string => linkStats(s);
+  protected readonly canShare = canShareNatively();
 
   private timer?: ReturnType<typeof setTimeout>;
 
@@ -347,17 +352,32 @@ export class ObjectPage implements OnInit, OnDestroy {
     const note = this.shareNote.trim();
     this.run(() => this.api.createShare(this.id, note || null, this.shareDays || null), (s) => {
       this.shareNote = '';
-      void this.copyLink(s.token);
+      void this.copyLink(s);
       this.loadShares();
     });
   }
 
-  protected async copyLink(token: string): Promise<void> {
+  /** The file name, the note, its size and who shared it, then the link. */
+  private messageFor(s: Share): ShareMessage {
+    const o = this.object();
+    return fileMessage(o?.latest?.filename ?? s.name, s.description, this.bytes(o?.latest?.size ?? 0),
+      this.session.tenant()?.name, this.shareUrl(s.token));
+  }
+
+  /** Opens the phone's share sheet (WhatsApp and others) with the message filled in. */
+  protected async shareSheet(s: Share): Promise<void> {
+    if (!await shareNatively(this.messageFor(s))) {
+      await this.copyLink(s);
+    }
+  }
+
+  protected async copyLink(s: Share): Promise<void> {
+    const text = messageText(this.messageFor(s));
     try {
-      await navigator.clipboard.writeText(this.shareUrl(token));
-      this.message.set('Link copied. Paste it in a message to share.');
+      await navigator.clipboard.writeText(text);
+      this.message.set('Message copied, with the file name and the link. Paste it in a chat to share.');
     } catch {
-      this.message.set(`Your link: ${this.shareUrl(token)}`);
+      this.message.set(text);
     }
   }
 

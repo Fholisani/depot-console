@@ -18,6 +18,9 @@ import { ConfirmService } from '../../core/ui/confirm.service';
 import { describeError, formatBytes } from '../../core/ui/format';
 import { type MediaKind, linkStats } from '../../core/ui/media';
 import { MediaViewer, type ViewerItem } from '../../core/ui/media-viewer';
+import {
+  albumMessage, canShareNatively, describeItems, messageText, shareNatively, type ShareMessage,
+} from '../../core/ui/share-message';
 import { fileDetails, ownerSource } from '../../core/ui/owner-viewer';
 import { FileTile } from '../files/file-tile';
 
@@ -138,7 +141,10 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
                   @if (s.expiresAt) { · until {{ s.expiresAt | date: 'd MMM y' }} } @else { · no end date }
                 </ion-note>
                 <div>
-                  <ion-button size="small" fill="clear" (click)="copyLink(s.token)">Copy link</ion-button>
+                  @if (canShare) {
+                    <ion-button size="small" (click)="shareSheet(s)">Share…</ion-button>
+                  }
+                  <ion-button size="small" fill="clear" (click)="copyLink(s)">Copy message</ion-button>
                   <ion-button size="small" fill="clear" (click)="toggleStats(s)">
                     {{ statsFor() === s.id ? 'Hide' : 'Show' }} views per file</ion-button>
                   <ion-button size="small" fill="clear" color="danger" (click)="stopSharing(s)">Stop sharing</ion-button>
@@ -229,6 +235,7 @@ export class AlbumPage implements OnInit {
   protected readonly links = signal<Share[]>([]);
   protected readonly statsFor = signal<string | null>(null);
   protected readonly itemStats = signal<ShareItemStat[]>([]);
+  protected readonly canShare = canShareNatively();
 
   ngOnInit(): void {
     this.reload();
@@ -421,18 +428,35 @@ export class AlbumPage implements OnInit {
     const note = this.shareNote.trim();
     this.run(() => this.api.shareAlbum(this.id, note || null, this.shareDays || null), (s) => {
       this.shareNote = '';
-      void this.copyLink(s.token);
+      void this.copyLink(s);
       this.loadLinks();
       this.album.update((a) => (a ? { ...a, shared: true } : a));
     });
   }
 
-  protected async copyLink(token: string): Promise<void> {
+  /** The album's name, the note or description, what it holds and who shared it, then the link. */
+  private messageFor(s: Share): ShareMessage {
+    const a = this.album();
+    const total = a?.itemCount ?? this.items().length;
+    const kinds = this.cursor() ? [] : this.items().map((i) => i.kind);
+    return albumMessage({ name: a?.name ?? s.name, description: a?.description }, s.description,
+      describeItems(kinds, total), this.session.tenant()?.name, this.shareUrl(s.token));
+  }
+
+  /** Opens the phone's share sheet (WhatsApp and others) with the message filled in. */
+  protected async shareSheet(s: Share): Promise<void> {
+    if (!await shareNatively(this.messageFor(s))) {
+      await this.copyLink(s);
+    }
+  }
+
+  protected async copyLink(s: Share): Promise<void> {
+    const text = messageText(this.messageFor(s));
     try {
-      await navigator.clipboard.writeText(this.shareUrl(token));
-      this.message.set('Link copied. Paste it in a message to share the album.');
+      await navigator.clipboard.writeText(text);
+      this.message.set('Message copied, with the album name and the link. Paste it in a chat to share.');
     } catch {
-      this.message.set(`Your link: ${this.shareUrl(token)}`);
+      this.message.set(text);
     }
   }
 
