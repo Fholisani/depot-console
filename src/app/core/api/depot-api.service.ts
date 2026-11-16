@@ -1,6 +1,6 @@
 import { HttpClient, HttpEvent, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable, catchError, map, throwError } from 'rxjs';
+import { Observable, catchError, map, retry, throwError, timer } from 'rxjs';
 import { APP_CONFIG } from '../config/app-config';
 import { ApiError } from './api-error';
 import type {
@@ -29,6 +29,9 @@ export interface SearchQuery {
  * Typed client for the Depot API. Each method returns the envelope's `data`; failures surface as
  * {@link ApiError}. Types come from the contract (`models.ts`).
  */
+/** Waits before each retry of a search that answered SEARCH_UNAVAILABLE (17s in all). */
+export const SEARCH_RETRY_DELAYS_MS = [2000, 5000, 10000];
+
 @Injectable({ providedIn: 'root' })
 export class DepotApi {
   private readonly http = inject(HttpClient);
@@ -144,7 +147,18 @@ export class DepotApi {
         params = params.set(key, String(value));
       }
     }
-    return this.get<SearchResults>('/v1/search', params);
+    // Search sits on Elasticsearch, whose disk sometimes stalls for a few seconds; the API then answers
+    // SEARCH_UNAVAILABLE. Retry quietly a few times before showing the error, so a short stall only
+    // makes the page a little slower.
+    return this.get<SearchResults>('/v1/search', params).pipe(
+      retry({
+        count: SEARCH_RETRY_DELAYS_MS.length,
+        delay: (e: unknown, attempt: number) =>
+          e instanceof ApiError && e.reason === 'SEARCH_UNAVAILABLE'
+            ? timer(SEARCH_RETRY_DELAYS_MS[attempt - 1])
+            : throwError(() => e),
+      }),
+    );
   }
 
   object(id: string): Observable<DepotObject> {
