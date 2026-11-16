@@ -1,11 +1,12 @@
 import { DatePipe } from '@angular/common';
-import { Component, inject, OnDestroy, OnInit, signal } from '@angular/core';
+import { Component, HostListener, inject, OnDestroy, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { HttpEventType } from '@angular/common/http';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { firstValueFrom, Subscription, type Observable } from 'rxjs';
 import { hideObject, unhideObject } from '../../core/ui/hidden-objects';
 import { ConfirmService } from '../../core/ui/confirm.service';
+import { BackService } from '../../core/ui/back.service';
 import { currentEnvironment, shareLinkFor } from '../../core/slot/slot.service';
 import {
   IonBadge, IonButton, IonCard, IonCardContent, IonCardHeader, IonCardTitle, IonInput, IonItem,
@@ -45,7 +46,10 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
     IonSelectOption, IonSpinner, IonText,
   ],
   template: `
-    <p><a routerLink="/app/files">&larr; Files</a></p>
+    <div class="topbar">
+      <ion-button fill="clear" size="small" (click)="goBack()" class="back">&larr; {{ backLabel() }}</ion-button>
+      <ion-button fill="clear" size="small" color="medium" (click)="goBack()" aria-label="Close" class="close">✕</ion-button>
+    </div>
     @if (loading()) {
       <ion-spinner name="crescent" aria-label="Loading" />
     } @else if (object(); as o) {
@@ -250,6 +254,10 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
     }
   `,
   styles: [`
+    .topbar { position: sticky; top: 0; z-index: 5; display: flex; justify-content: space-between; align-items: center;
+      margin: -0.5rem -0.5rem 0.25rem; padding: 0.25rem; background: var(--ion-background-color, #fff); }
+    .topbar .back { --padding-start: 0.25rem; text-transform: none; font-size: 0.95rem; }
+    .topbar .close { font-size: 1.2rem; }
     .viewer { margin: 0.75rem 0; background: #000; border-radius: 12px; overflow: hidden; text-align: center; }
     .viewer img, .viewer video { max-width: 100%; max-height: 70vh; display: block; margin: 0 auto; }
     .viewer audio { width: 100%; background: #fff; }
@@ -271,8 +279,30 @@ export class ObjectPage implements OnInit, OnDestroy {
   private readonly router = inject(Router);
   private readonly confirm = inject(ConfirmService);
   protected readonly session = inject(SessionService);
-
+  private readonly backNav = inject(BackService);
   protected readonly id = this.route.snapshot.paramMap.get('id') ?? '';
+
+  /** "Back to Braai 14", "Back to Files", or "Files" when the page was opened directly. */
+  protected backLabel(): string {
+    const albumId = this.backNav.previousAlbumId();
+    const album = albumId ? this.inAlbums().find((a) => a.id === albumId)?.name : null;
+    return this.backNav.label('Files', { album });
+  }
+
+  /** Back to where the user came from (album, folder filter, viewer), else to Files. */
+  protected goBack(): void {
+    this.backNav.back('/app/files');
+  }
+
+  /** Escape closes the page, unless a dialog or a text field has the focus. */
+  @HostListener('document:keydown.escape', ['$event'])
+  protected onEscape(e: Event): void {
+    const target = e.target as HTMLElement | null;
+    if (document.querySelector('ion-alert, ion-popover, ion-modal') || target?.closest('input, textarea, ion-input')) {
+      return;
+    }
+    this.goBack();
+  }
   protected readonly object = signal<DepotObject | null>(null);
   protected readonly versions = signal<Version[]>([]);
   protected readonly tagRows = signal<TagRow[]>([]);
@@ -556,7 +586,7 @@ export class ObjectPage implements OnInit, OnDestroy {
     }
     this.run(() => this.api.deleteObject(this.id), () => {
       hideObject(this.id);
-      void this.router.navigateByUrl('/app/files');
+      this.goBack();
     });
   }
 

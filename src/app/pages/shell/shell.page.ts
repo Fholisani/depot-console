@@ -6,6 +6,7 @@ import {
 } from '@ionic/angular';
 import { OidcSecurityService } from 'angular-auth-oidc-client';
 import { SessionService } from '../../core/tenant/session.service';
+import { BackService } from '../../core/ui/back.service';
 import { TenantService } from '../../core/tenant/tenant.service';
 import { describeError } from '../../core/ui/format';
 
@@ -70,6 +71,8 @@ import { describeError } from '../../core/ui/format';
 })
 export class ShellPage implements OnInit {
   protected readonly session = inject(SessionService);
+  /** Created with the shell, so it has seen the page before any detail page opens. */
+  private readonly backNav = inject(BackService);
   private readonly oidc = inject(OidcSecurityService);
   private readonly tenants = inject(TenantService);
   private readonly router = inject(Router);
