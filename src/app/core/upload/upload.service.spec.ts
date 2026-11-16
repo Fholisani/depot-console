@@ -107,7 +107,8 @@ describe('UploadTask pause and resume', () => {
     const result = task.start();
     await until(() => FakeXhr.all.length >= 3, 'three parts on the wire');
     // Three parts (the concurrency limit) are on the wire; none has finished.
-    expect(FakeXhr.all.map((x) => x.url)).toEqual(['part-1', 'part-2', 'part-3']);
+    // Parts start concurrently (each after hashing), so their order varies; only the set matters.
+    expect(FakeXhr.all.map((x) => x.url).sort()).toEqual(['part-1', 'part-2', 'part-3']);
 
     task.pause();
     await until(() => phases.at(-1)?.phase === 'pausing', 'pausing');
@@ -159,6 +160,16 @@ describe('UploadTask pause and resume', () => {
   });
 });
 
+/** Yields one real event-loop turn (not affected by fake timers), so real async work can finish. */
+const realTick = (): Promise<void> => new Promise((resolve) => {
+  const channel = new MessageChannel();
+  channel.port1.onmessage = () => {
+    channel.port1.close();
+    resolve();
+  };
+  channel.port2.postMessage(null);
+});
+
 describe('UploadTask small-file retry', () => {
   const storageDown = (): HttpErrorResponse => new HttpErrorResponse({
     status: 503,
@@ -170,16 +181,21 @@ describe('UploadTask small-file retry', () => {
   afterEach(() => vi.useRealTimers());
 
   const run = async (responses: unknown[]): Promise<{ result: Promise<unknown>; calls: () => number }> => {
-    vi.useFakeTimers();
+    // Fake only the retry delays. The file hash runs on real crypto and needs the real event loop,
+    // so the loop below advances fake time and also yields a real macrotask until the upload settles,
+    // however slow the machine is.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     let calls = 0;
     const api = {
       uploadSimple: () => responses[Math.min(calls++, responses.length - 1)],
     } as unknown as DepotApi;
     const task = new UploadTask(api, 'default', new File([new Uint8Array(10)], 'a.jpg'), () => undefined);
+    let settled = false;
     const result = task.start();
-    result.catch(() => undefined);
-    for (let i = 0; i < 10; i++) {
-      await vi.advanceTimersByTimeAsync(5000);
+    result.then(() => (settled = true), () => (settled = true));
+    for (let i = 0; i < 2000 && !settled; i++) {
+      await vi.advanceTimersByTimeAsync(1000);
+      await realTick();
     }
     return { result, calls: () => calls };
   };
