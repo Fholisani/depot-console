@@ -1,8 +1,9 @@
 import { HttpErrorResponse, HttpEventType } from '@angular/common/http';
 import { of, throwError } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../api/api-error';
 import type { DepotApi } from '../api/depot-api.service';
-import { UploadProgress, UploadTask } from './upload.service';
+import { RESUMABLE_FROM, UploadProgress, UploadTask, sessionKey } from './upload.service';
 
 const MIB = 1024 * 1024;
 const PART = 16 * MIB;
@@ -36,6 +37,10 @@ class FakeXhr {
   finish(): void {
     this.status = 200;
     this.onload?.();
+  }
+  /** The connection dropped (for example the phone screen locked). */
+  fail(): void {
+    this.onerror?.();
   }
 }
 
@@ -218,5 +223,139 @@ describe('UploadTask small-file retry', () => {
     const { result, calls } = await run([throwError(() => forbidden)]);
     await expect(result).rejects.toMatchObject({ reason: 'INSUFFICIENT_ROLE' });
     expect(calls()).toBe(1);
+  });
+});
+
+describe('UploadTask survives a dropped connection and a page reload', () => {
+  const received = new Map<number, number>();
+  let phases: UploadProgress[];
+  let api: DepotApi;
+  let created: number;
+  let aborted: number;
+  let statusCalls: string[];
+  let failNextTarget: unknown;
+  const partCount = 5;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    FakeXhr.all = [];
+    received.clear();
+    localStorage.clear();
+    phases = [];
+    created = 0;
+    aborted = 0;
+    statusCalls = [];
+    failNextTarget = null;
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+    api = {
+      createUpload: () => {
+        created++;
+        return of({ uploadId: 'u1', partSize: PART, partCount, size: 70 * MIB, status: 'OPEN' });
+      },
+      partTarget: (_id: string, n: number) => {
+        if (failNextTarget) {
+          const e = failNextTarget;
+          failNextTarget = null;
+          return throwError(() => e);
+        }
+        return of({ partNumber: n, request: { url: `part-${n}`, method: 'PUT', headers: {} } });
+      },
+      uploadStatus: (id: string) => {
+        statusCalls.push(id);
+        return of({
+          uploadId: id, status: 'OPEN', size: 70 * MIB, partSize: PART, partCount,
+          received: [...received].map(([partNumber, size]) => ({ partNumber, size, etag: `"etag-part-${partNumber}"` })),
+          missing: Array.from({ length: partCount }, (_, i) => i + 1).filter((n) => !received.has(n)),
+        });
+      },
+      completeUpload: () => of({ objectId: 'o1', status: 'READY' }),
+      abortUpload: () => {
+        aborted++;
+        return of(undefined);
+      },
+    } as unknown as DepotApi;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  const live = (): FakeXhr[] => FakeXhr.all.filter((x) => !x.aborted && x.status === 0 && x.onerror);
+  /** Moves time on until the condition holds (hashing 16 MiB parts takes real time). */
+  const until = async (what: string, cond: () => boolean): Promise<void> => {
+    for (let i = 0; i < 600 && !cond(); i++) {
+      await vi.advanceTimersByTimeAsync(500);
+      await realTick();
+    }
+    expect(cond(), what).toBe(true);
+  };
+  const inFlight = (part: number): boolean => live().some((x) => x.url === `part-${part}`);
+  const finish = (part: number): void => {
+    const xhr = live().find((x) => x.url === `part-${part}`);
+    expect(xhr, `part ${part} should be in flight`).toBeDefined();
+    received.set(part, PART);
+    xhr!.finish();
+  };
+  const file = (): File => new File([new ArrayBuffer(70 * MIB)], 'ride.mov', { lastModified: 1700000000000 });
+
+  it('keeps the stored parts when the connection drops and carries on by itself', async () => {
+    const task = new UploadTask(api, 'default', file(), (p) => phases.push(p));
+    const result = task.start();
+    await until('part 1 sending', () => inFlight(1));
+    finish(1);
+    await until('more parts sending', () => live().length > 0);
+    // The screen locks: every request on the wire fails at once.
+    live().forEach((x) => x.fail());
+    await until('waiting for the connection', () => phases.some((p) => p.phase === 'waiting'));
+    expect(aborted).toBe(0);                                  // nothing thrown away
+
+    // Back online: it carries on with only the parts storage does not have.
+    const before = FakeXhr.all.length;
+    for (const n of [2, 3, 4, 5]) {
+      await until(`part ${n} sending again`, () => inFlight(n));
+      finish(n);
+    }
+    await expect(result).resolves.toMatchObject({ objectId: 'o1' });
+    expect(FakeXhr.all.slice(before).map((x) => x.url)).not.toContain('part-1');
+    expect(created).toBe(1);
+  });
+
+  it('continues the same session when the same file is chosen again after the page reloaded', async () => {
+    // What a reload leaves behind: the session remembered for this file, and parts 1-2 in storage.
+    const f = file();
+    localStorage.setItem(sessionKey('default', f), 'u1');
+    received.set(1, PART);
+    received.set(2, PART);
+
+    const again = new UploadTask(api, 'default', f, (p) => phases.push(p));
+    const result = again.start();
+    for (const n of [3, 4, 5]) {
+      await until(`part ${n} sending`, () => inFlight(n));
+      finish(n);
+    }
+    await expect(result).resolves.toMatchObject({ objectId: 'o1' });
+    expect(created).toBe(0);                                  // the saved session was continued
+    expect(statusCalls).toContain('u1');
+    expect(FakeXhr.all.map((x) => x.url).sort()).toEqual(['part-3', 'part-4', 'part-5']);
+    expect(localStorage.length).toBe(0);                      // forgotten once complete
+  });
+
+  it('still releases the session on a real error', async () => {
+    failNextTarget = new ApiError(409, 'PART_CHECKSUM_MISMATCH', 'Part does not match');
+    const task = new UploadTask(api, 'default', file(), () => undefined);
+    let settled = false;
+    const result = task.start();
+    result.then(() => (settled = true), () => (settled = true));
+    await until('upload settled', () => settled);
+    await expect(result).rejects.toMatchObject({ reason: 'PART_CHECKSUM_MISMATCH' });
+    expect(aborted).toBe(1);
+    expect(localStorage.length).toBe(0);
+  });
+
+  it('sends phone-sized videos in resumable parts', () => {
+    const video = new File([new ArrayBuffer(20 * MIB)], 'clip.mov');
+    expect(video.size).toBeGreaterThan(RESUMABLE_FROM);
+    expect(new UploadTask(api, 'default', video, () => undefined).pausable).toBe(true);
   });
 });

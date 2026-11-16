@@ -12,7 +12,8 @@ import { DepotApi } from '../../core/api/depot-api.service';
 import type { Album, AlbumItem, Namespace, Share, ShareItemStat } from '../../core/api/models';
 import { currentEnvironment, shareLinkFor } from '../../core/slot/slot.service';
 import { SessionService } from '../../core/tenant/session.service';
-import { UploadCancelled, UploadService } from '../../core/upload/upload.service';
+import { UploadCancelled, UploadPhase, UploadService, UploadTask } from '../../core/upload/upload.service';
+import { uploadStatusText } from '../../core/upload/upload-status';
 import { AlbumDialogs } from '../../core/ui/album-dialogs.service';
 import { ConfirmService } from '../../core/ui/confirm.service';
 import { describeError, formatBytes } from '../../core/ui/format';
@@ -28,6 +29,8 @@ interface AlbumUpload {
   id: string;
   name: string;
   percent: number;
+  size: number;
+  phase?: UploadPhase;
   done?: boolean;
   error?: string;
 }
@@ -78,7 +81,24 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
           } @else if (u.done) {
             <ion-note>Added to the album</ion-note>
           } @else {
-            <ion-progress-bar [value]="u.percent / 100" [attr.aria-label]="'Uploading ' + u.name" />
+            @if (u.phase === 'preparing' || u.phase === 'finishing' || !u.phase) {
+              <ion-progress-bar type="indeterminate" [attr.aria-label]="'Uploading ' + u.name" />
+            } @else {
+              <ion-progress-bar [value]="u.percent / 100" [color]="u.phase === 'uploading' ? 'primary' : 'medium'"
+                [attr.aria-label]="'Uploading ' + u.name" />
+            }
+            <div class="controls">
+              <ion-note class="status" aria-live="polite">{{ status(u) }}</ion-note>
+              @if (canPause(u)) {
+                <ion-button size="small" fill="clear" (click)="pauseUpload(u)">Pause</ion-button>
+              }
+              @if (u.phase === 'paused' || u.phase === 'pausing') {
+                <ion-button size="small" fill="clear" (click)="resumeUpload(u)">Resume</ion-button>
+              }
+              @if (u.phase !== 'finishing') {
+                <ion-button size="small" fill="clear" color="medium" (click)="cancelUpload(u)">Cancel</ion-button>
+              }
+            </div>
           }
         </div>
       }
@@ -188,6 +208,8 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
     .actions { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; margin: 0.5rem 0; }
     .spacer { flex: 1; }
     .job { display: grid; gap: 0.25rem; margin: 0.4rem 0; font-size: 0.9rem; }
+    .job .status { font-size: 0.85rem; }
+    .job .controls { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
     .select-bar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap;
       padding: 0.4rem 0.6rem; margin: 0.25rem 0; border-radius: 10px; background: var(--ion-color-primary-tint, #e8edff); }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: 0.75rem; margin: 0.75rem 0 1rem; }
@@ -383,18 +405,43 @@ export class AlbumPage implements OnInit {
     picker.click();
   }
 
+  /** Running uploads by job id, for pause, resume and cancel. */
+  private readonly tasks = new Map<string, UploadTask>();
+
+  protected status(u: AlbumUpload): string {
+    return uploadStatusText(u.phase, u.percent, u.size);
+  }
+
+  protected canPause(u: AlbumUpload): boolean {
+    return (this.tasks.get(u.id)?.pausable ?? false) && (u.phase === 'uploading' || u.phase === 'waiting');
+  }
+
+  protected pauseUpload(u: AlbumUpload): void {
+    this.tasks.get(u.id)?.pause();
+  }
+
+  protected resumeUpload(u: AlbumUpload): void {
+    this.tasks.get(u.id)?.resume();
+  }
+
+  protected cancelUpload(u: AlbumUpload): void {
+    this.tasks.get(u.id)?.cancel();
+  }
+
   /** Uploads each file into the album's folder and adds it to the album when its upload completes. */
   protected async upload(input: HTMLInputElement): Promise<void> {
     const files = Array.from(input.files ?? []);
     input.value = '';
     const folder = this.album()?.uploadNamespace ?? 'default';
-    const jobs = files.map((f) => ({ id: crypto.randomUUID(), name: f.name, percent: 0, file: f }));
+    const jobs = files.map((f) => ({ id: crypto.randomUUID(), name: f.name, percent: 0, size: f.size, file: f }));
     this.uploads.update((list) => [...jobs.map(({ file: _f, ...j }) => j), ...list]);
     const update = (id: string, patch: Partial<AlbumUpload>): void =>
       this.uploads.update((list) => list.map((u) => (u.id === id ? { ...u, ...patch } : u)));
     await Promise.all(jobs.map(async (job) => {
       try {
-        const task = this.uploader.create(folder, job.file, (p) => update(job.id, { percent: p.percent }));
+        const task = this.uploader.create(folder, job.file,
+          (p) => update(job.id, { percent: p.percent, phase: p.phase }));
+        this.tasks.set(job.id, task);
         const result = await task.start();
         await firstValueFrom(this.api.addToAlbum(this.id, [result.objectId]));
         update(job.id, { done: true, percent: 100 });
@@ -402,6 +449,8 @@ export class AlbumPage implements OnInit {
         update(job.id, {
           error: e instanceof UploadCancelled ? 'Cancelled' : describeError(ApiError.from(e), PROBLEMS),
         });
+      } finally {
+        this.tasks.delete(job.id);
       }
     }));
     this.reload();

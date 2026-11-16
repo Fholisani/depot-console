@@ -1,6 +1,7 @@
 import {
   Component, ElementRef, HostListener, OnDestroy, OnInit, computed, effect, input, model, output, signal, untracked,
   viewChild,
+  inject,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { formatBytes } from './format';
@@ -52,7 +53,8 @@ export type ViewerSourceFn = (item: ViewerItem) => Promise<ViewerSource>;
           <button type="button" class="btn close" (click)="close.emit()" aria-label="Close viewer">✕</button>
         </div>
       </header>
-      <div class="stage" (touchstart)="touchStart($event)" (touchend)="touchEnd($event)">
+      <div class="stage" (touchstart)="touchStart($event)" (touchend)="touchEnd($event)"
+        (click)="backdropClick($event)">
         @if (index() > 0) {
           <button type="button" class="nav prev" (click)="go(-1)" aria-label="Previous">‹</button>
         }
@@ -101,16 +103,20 @@ export type ViewerSourceFn = (item: ViewerItem) => Promise<ViewerSource>;
     .overlay { position: fixed; inset: 0; z-index: 2000; background: #000; color: #fff; display: grid;
       grid-template-rows: auto 1fr; outline: none; }
     .bar { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem;
-      padding: 0.5rem 0.75rem; background: rgba(0,0,0,0.6); }
+      padding: calc(0.5rem + env(safe-area-inset-top, 0px)) calc(0.75rem + env(safe-area-inset-right, 0px))
+        0.5rem calc(0.75rem + env(safe-area-inset-left, 0px));
+      background: rgba(0,0,0,0.6); position: relative; z-index: 2; }
     .title { display: grid; min-width: 0; }
     .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .meta { font-size: 0.8rem; color: #bbb; }
     .actions { display: flex; gap: 0.4rem; align-items: center; flex-shrink: 0; }
     .btn { color: #fff; background: rgba(255,255,255,0.12); border: 0; border-radius: 8px; padding: 0.4rem 0.7rem;
       text-decoration: none; font-size: 0.9rem; cursor: pointer; }
-    .close { font-size: 1.1rem; }
+    .close { font-size: 1.3rem; min-width: 2.75rem; min-height: 2.75rem; }
     .stage { position: relative; display: grid; place-items: center; overflow: hidden; touch-action: pan-y; }
-    .stage img, .stage video { max-width: 100vw; max-height: calc(100vh - 3.5rem); object-fit: contain; display: block; }
+    .stage img, .stage video { max-width: 100vw; max-height: calc(100dvh - 4.5rem - env(safe-area-inset-top, 0px));
+      object-fit: contain; display: block; }
+    .overlay { height: 100dvh; }
     .nav { position: absolute; top: 50%; transform: translateY(-50%); width: 3rem; height: 3rem; border-radius: 50%;
       border: 0; background: rgba(255,255,255,0.15); color: #fff; font-size: 2rem; line-height: 1; cursor: pointer; z-index: 1; }
     .prev { left: 0.5rem; }
@@ -145,6 +151,8 @@ export class MediaViewer implements OnInit, OnDestroy {
   private readonly cache = new Map<string, Promise<ViewerSource>>();
   private readonly retried = new Set<string>();
   private touchX: number | null = null;
+  private touchY: number | null = null;
+  private readonly host = inject(ElementRef<HTMLElement>);
   private previousOverflow = '';
 
   /** Changes only when another file is shown, not when more of the list loads. */
@@ -176,6 +184,10 @@ export class MediaViewer implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    // Render on top of the whole page, not inside the scrolling content: inside Ionic's content the
+    // fixed overlay was placed relative to the scrolled list, so its top bar (and the ✕) could sit
+    // above the screen on a phone.
+    document.body.appendChild(this.host.nativeElement);
     this.previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     setTimeout(() => this.overlay()?.nativeElement.focus());
@@ -183,6 +195,14 @@ export class MediaViewer implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     document.body.style.overflow = this.previousOverflow;
+    this.host.nativeElement.remove();
+  }
+
+  /** A tap on the empty area around the picture or video closes the viewer. */
+  protected backdropClick(e: MouseEvent): void {
+    if (e.target === e.currentTarget) {
+      this.close.emit();
+    }
   }
 
   protected icon(): string {
@@ -211,17 +231,25 @@ export class MediaViewer implements OnInit, OnDestroy {
 
   protected touchStart(e: TouchEvent): void {
     this.touchX = e.changedTouches[0]?.clientX ?? null;
+    this.touchY = e.changedTouches[0]?.clientY ?? null;
   }
 
+  /** Swipe left or right for the next or previous file; swipe down to close. */
   protected touchEnd(e: TouchEvent): void {
-    const start = this.touchX;
+    const startX = this.touchX;
+    const startY = this.touchY;
     this.touchX = null;
-    const end = e.changedTouches[0]?.clientX;
-    if (start === null || end === undefined) {
+    this.touchY = null;
+    const endX = e.changedTouches[0]?.clientX;
+    const endY = e.changedTouches[0]?.clientY;
+    if (startX === null || startY === null || endX === undefined || endY === undefined) {
       return;
     }
-    const dx = end - start;
-    if (Math.abs(dx) > 50) {
+    const dx = endX - startX;
+    const dy = endY - startY;
+    if (dy > 80 && dy > Math.abs(dx) * 1.5) {
+      this.close.emit();
+    } else if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
       this.go(dx < 0 ? 1 : -1);
     }
   }

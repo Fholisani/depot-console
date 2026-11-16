@@ -18,6 +18,7 @@ import { MediaViewer, type ViewerItem } from '../../core/ui/media-viewer';
 import { fileDetails, ownerSource } from '../../core/ui/owner-viewer';
 import { SessionService } from '../../core/tenant/session.service';
 import { UploadCancelled, UploadPhase, UploadService, UploadTask } from '../../core/upload/upload.service';
+import { uploadStatusText } from '../../core/upload/upload-status';
 import { hiddenObjects } from '../../core/ui/hidden-objects';
 import { describeError, formatBytes } from '../../core/ui/format';
 
@@ -97,8 +98,8 @@ interface UploadJob {
         } @else if (job.result; as r) {
           <a [routerLink]="['/app/files', r.objectId]">Uploaded · {{ r.status }}</a>
         } @else {
-          @if (job.phase === 'uploading' || job.phase === 'pausing' || job.phase === 'paused') {
-            <ion-progress-bar [value]="job.percent / 100" [color]="job.phase === 'paused' || job.phase === 'pausing' ? 'medium' : 'primary'"
+          @if (job.phase === 'uploading' || job.phase === 'pausing' || job.phase === 'paused' || job.phase === 'waiting') {
+            <ion-progress-bar [value]="job.percent / 100" [color]="job.phase === 'uploading' ? 'primary' : 'medium'"
               [attr.aria-label]="'Uploading ' + job.name" />
           } @else {
             <ion-progress-bar type="indeterminate" [attr.aria-label]="'Uploading ' + job.name" />
@@ -556,18 +557,7 @@ export class FilesPage implements OnInit {
 
   /** "Preparing…", "Uploading 42% · 120 MB of 284 MB", "Paused at 42% …", "Finishing…". */
   protected statusText(job: UploadJob): string {
-    if (job.phase === 'preparing') {
-      return 'Preparing…';
-    }
-    if (job.phase === 'finishing') {
-      return 'Finishing…';
-    }
-    const size = job.file?.size;
-    const done = size ? ` · ${this.bytes(Math.round((size * job.percent) / 100))} of ${this.bytes(size)}` : '';
-    if (job.phase === 'pausing') {
-      return `Pausing… finishing the parts already sending (${job.percent}%${done.replace(' · ', ', ')})`;
-    }
-    return job.phase === 'paused' ? `Paused at ${job.percent}%${done}` : `Uploading ${job.percent}%${done}`;
+    return uploadStatusText(job.phase, job.percent, job.file?.size);
   }
 
   /** Paused, or pause requested and the parts already sending are still finishing. */
