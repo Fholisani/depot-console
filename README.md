@@ -9,6 +9,8 @@ It runs on its own at `https://fmash.online/depot-console/`, like stokvel-admin.
 (`Dockerfile`, `nginx.conf`), and sets that tag in the deployment repo (`prod/depot-console`). The
 Argo CD app `depot-console` then rolls it out.
 
+How to open the active and passive Console, sign in, and call the API: [docs/ACCESS.md](docs/ACCESS.md).
+
 ## Requirements
 
 Node 24 (Angular 22 needs `^22.22.3` or `^24.15`). With nvm: `nvm use 24`.

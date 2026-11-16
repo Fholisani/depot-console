@@ -8,8 +8,12 @@ import type {
   Envelope, FirstLogin, LifecyclePreview, LifecycleRule, LifecycleRuleBody, Namespace,
   NamespaceSettings, NewApiKey, ObjectResult, OnboardingStep, PartTarget, Progress, RestoreResult,
   SearchResults, SignupRequest, SignupResult, Tags, Upload, UploadStatus, UsageReport, Version,
-  Share, SharedFile, ThumbnailInfo, ViewInfo, Webhook, WebhookBody, WhoAmI,
+  Share, SharedLink, SharedItemPage, ShareItemStat, ThumbnailInfo, ViewInfo, Webhook, WebhookBody, WhoAmI,
+  Album, AlbumAddResult, AlbumItemPage, AlbumMembership, AlbumRemoved, CreateAlbum, UpdateAlbum,
 } from './models';
+
+/** What a shared album item's URL points at: the 480 px tile, the 1600 px preview, or the file. */
+export type SharedItemPart = 'thumbnail' | 'preview' | 'content';
 
 export interface SearchQuery {
   q?: string;
@@ -189,10 +193,72 @@ export class DepotApi {
     return this.get<ThumbnailInfo>(`/v1/objects/${id}/thumbnail`);
   }
 
+  /** URL of a 1600 px picture for the full-screen viewer; fails with 404 for files that have none. */
+  preview(id: string): Observable<ThumbnailInfo> {
+    return this.get<ThumbnailInfo>(`/v1/objects/${id}/preview`);
+  }
+
+  // ------------------------------------------------------------------ albums
+
+  albums(): Observable<Album[]> {
+    return this.get<Album[]>('/v1/albums');
+  }
+
+  album(id: string): Observable<Album> {
+    return this.get<Album>(`/v1/albums/${id}`);
+  }
+
+  createAlbum(body: CreateAlbum): Observable<Album> {
+    return this.send<Album>('POST', '/v1/albums', body);
+  }
+
+  updateAlbum(id: string, body: UpdateAlbum): Observable<Album> {
+    return this.send<Album>('PATCH', `/v1/albums/${id}`, body);
+  }
+
+  deleteAlbum(id: string): Observable<void> {
+    return this.send<void>('DELETE', `/v1/albums/${id}`);
+  }
+
+  albumItems(id: string, cursor?: string, limit = 100): Observable<AlbumItemPage> {
+    let params = new HttpParams().set('limit', limit);
+    if (cursor) {
+      params = params.set('cursor', cursor);
+    }
+    return this.get<AlbumItemPage>(`/v1/albums/${id}/items`, params);
+  }
+
+  addToAlbum(id: string, objectIds: string[]): Observable<AlbumAddResult> {
+    return this.send<AlbumAddResult>('POST', `/v1/albums/${id}/items`, { objectIds });
+  }
+
+  removeFromAlbum(id: string, objectIds: string[]): Observable<AlbumRemoved> {
+    return this.send<AlbumRemoved>('DELETE', `/v1/albums/${id}/items`, { objectIds });
+  }
+
+  /** Puts the given items first, in this order; the rest keep their order after them. */
+  reorderAlbum(id: string, objectIds: string[]): Observable<void> {
+    return this.send<void>('PUT', `/v1/albums/${id}/order`, { objectIds });
+  }
+
+  /** Which albums each file is in (at most 500 ids). */
+  albumMembership(objectIds: string[]): Observable<AlbumMembership[]> {
+    return this.send<AlbumMembership[]>('POST', '/v1/albums/membership', { objectIds });
+  }
+
   // ------------------------------------------------------------------ sharing
 
   createShare(id: string, description: string | null, expiresInDays: number | null): Observable<Share> {
     return this.send<Share>('POST', `/v1/objects/${id}/shares`, { description, expiresInDays });
+  }
+
+  shareAlbum(albumId: string, description: string | null, expiresInDays: number | null): Observable<Share> {
+    return this.send<Share>('POST', `/v1/albums/${albumId}/shares`, { description, expiresInDays });
+  }
+
+  /** Per-item views and downloads of an album link. */
+  shareItemStats(shareId: string): Observable<ShareItemStat[]> {
+    return this.get<ShareItemStat[]>(`/v1/shares/${shareId}/items`);
   }
 
   shares(): Observable<Share[]> {
@@ -203,9 +269,29 @@ export class DepotApi {
     return this.send<void>('DELETE', `/v1/shares/${shareId}`);
   }
 
-  /** Public (no sign-in): what a visitor is about to open. */
-  sharedFile(token: string): Observable<SharedFile> {
-    return this.get<SharedFile>(`/v1/share/${encodeURIComponent(token)}`);
+  /** Public (no sign-in): what a visitor is about to open, a file or an album. Counts a view. */
+  sharedLink(token: string): Observable<SharedLink> {
+    return this.get<SharedLink>(`/v1/share/${encodeURIComponent(token)}`);
+  }
+
+  /** Public: one page of a shared album's items. */
+  sharedItems(token: string, cursor?: string, limit = 60): Observable<SharedItemPage> {
+    let params = new HttpParams().set('limit', limit);
+    if (cursor) {
+      params = params.set('cursor', cursor);
+    }
+    return this.get<SharedItemPage>(`/v1/share/${encodeURIComponent(token)}/items`, params);
+  }
+
+  /** Public URL of a shared album item's thumbnail, preview or bytes, usable as img/video src or a link. */
+  sharedItemUrl(token: string, objectId: string, part: SharedItemPart, download = false): string {
+    return this.url(`/v1/share/${encodeURIComponent(token)}/items/${objectId}/${part}`
+      + (part === 'content' && download ? '?download=true' : ''));
+  }
+
+  /** Public URL of the whole shared album as a ZIP. */
+  sharedArchiveUrl(token: string): string {
+    return this.url(`/v1/share/${encodeURIComponent(token)}/archive`);
   }
 
   /** Public URL of a shared file's bytes, for img/video sources and the Download button. */
@@ -285,7 +371,7 @@ export class DepotApi {
   }
 
   private send<T>(
-    method: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown, headers?: Record<string, string>,
+    method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown, headers?: Record<string, string>,
   ): Observable<T> {
     return this.http.request<Envelope<T>>(method, this.url(path), { body, headers }).pipe(
       map((r) => r?.data as T),

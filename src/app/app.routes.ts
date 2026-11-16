@@ -38,6 +38,14 @@ export const routes: Routes = [
         loadComponent: () => import('./pages/object/object.page').then((m) => m.ObjectPage),
       },
       {
+        path: 'albums',
+        loadComponent: () => import('./pages/albums/albums.page').then((m) => m.AlbumsPage),
+      },
+      {
+        path: 'albums/:id',
+        loadComponent: () => import('./pages/albums/album.page').then((m) => m.AlbumPage),
+      },
+      {
         path: 'namespaces',
         loadComponent: () => import('./pages/namespaces/namespaces.page').then((m) => m.NamespacesPage),
       },

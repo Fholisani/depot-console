@@ -5,6 +5,7 @@
     "ng": "ng",
     "start": "ng serve",
     "start:deployed": "ng serve --proxy-config proxy.deployed.conf.json",
+    "start:passive": "ng serve --proxy-config proxy.passive.conf.json",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",

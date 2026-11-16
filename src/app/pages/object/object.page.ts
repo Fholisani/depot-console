@@ -13,7 +13,8 @@ import {
 } from '@ionic/angular';
 import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
-import type { DepotObject, Namespace, Progress, Share, Version, ViewInfo } from '../../core/api/models';
+import type { AlbumRef, DepotObject, Namespace, Progress, Share, Version, ViewInfo } from '../../core/api/models';
+import { linkStats } from '../../core/ui/media';
 import { SessionService } from '../../core/tenant/session.service';
 import { describeError, formatBytes } from '../../core/ui/format';
 
@@ -56,6 +57,13 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
         }
       </p>
       @if (o.externalRef) { <p>Reference: <code>{{ o.externalRef }}</code></p> }
+      @if (inAlbums().length > 0) {
+        <p class="albums">In albums:
+          @for (a of inAlbums(); track a.id; let last = $last) {
+            <a [routerLink]="['/app/albums', a.id]">{{ a.name }}</a>@if (a.shared) { <span class="muted"> (shared)</span> }@if (!last) {, }
+          }
+        </p>
+      }
       @if (o.latest?.sha256; as sha) { <p>SHA-256: <code class="wrap">{{ sha }}</code></p> }
 
       @if (message()) { <ion-text color="success"><p role="status">{{ message() }}</p></ion-text> }
@@ -160,7 +168,7 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
               <div class="share-row">
                 <code class="wrap">{{ shareUrl(s.token) }}</code>
                 <ion-note>
-                  {{ s.downloads }} {{ s.downloads === 1 ? 'download' : 'downloads' }}
+                  {{ stats(s) }}
                   @if (s.expiresAt) { · until {{ s.expiresAt | date: 'd MMM y' }} } @else { · no end date }
                 </ion-note>
                 <div>
@@ -250,6 +258,7 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
     .tag { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.5rem; align-items: center; }
     .wrap { word-break: break-all; }
     .tagbadge { margin-right: 0.35rem; }
+    .albums a { margin-left: 0.15rem; }
   `],
 })
 export class ObjectPage implements OnInit, OnDestroy {
@@ -282,6 +291,8 @@ export class ObjectPage implements OnInit, OnDestroy {
   protected shareNote = '';
   protected shareDays = 7;
   protected readonly fileShares = signal<Share[]>([]);
+  protected readonly inAlbums = signal<AlbumRef[]>([]);
+  protected readonly stats = (s: Share): string => linkStats(s);
 
   private timer?: ReturnType<typeof setTimeout>;
 
@@ -306,6 +317,10 @@ export class ObjectPage implements OnInit, OnDestroy {
         });
         this.watchProgress(o);
         this.loadView(o);
+        this.api.albumMembership([this.id]).subscribe({
+          next: (m) => this.inAlbums.set(m[0]?.albums ?? []),
+          error: () => undefined,
+        });
         if (this.session.canWrite() && o.status === 'ACTIVE') {
           this.loadShares();
         }

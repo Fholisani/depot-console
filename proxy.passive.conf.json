@@ -1,0 +1,8 @@
+{
+  "^/depot/": {
+    "target": "https://fmash.online",
+    "secure": true,
+    "changeOrigin": true,
+    "headers": { "X-Slot": "Passive" }
+  }
+}

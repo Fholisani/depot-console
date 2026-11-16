@@ -495,9 +495,11 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Details of a shared file
-         * @description No sign-in. Tells a visitor what they are about to open: name, size, type, an optional description,
-         *     who shared it and when the link expires. Unknown, revoked and expired links answer 404.
+         * Details of a shared file or album
+         * @description No sign-in. Tells a visitor what they are about to open. `target` says what the link points at:
+         *     for a `file`, its name, size and type; for an `album`, its name, item count, total size and cover.
+         *     Both carry an optional description, who shared it and when the link expires. Each call counts as
+         *     a view of the link. Unknown, revoked and expired links, and links to deleted albums, answer 404.
          */
         get: operations["getSharedFile"];
         put?: never;
@@ -517,10 +519,121 @@ export interface paths {
         };
         /**
          * The shared file
-         * @description No sign-in. Same delivery modes and headers as `downloadObject`. With `download=true` the request
-         *     counts as a download of the link and is sent as an attachment.
+         * @description No sign-in, file links only (an album link answers 404; use the album item endpoints). Same
+         *     delivery modes and headers as `downloadObject`. With `download=true` the request counts as a
+         *     download of the link and is sent as an attachment.
          */
         get: operations["downloadSharedFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/share/{token}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Items of a shared album
+         * @description No sign-in, album links only. The album's current items that can be opened, in album order, so
+         *     files added later appear and removed or deleted ones disappear. `thumbnail` tells whether
+         *     `/thumbnail` and `/preview` exist for an item; otherwise show a plain tile.
+         */
+        get: operations["listSharedAlbumItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/share/{token}/items/{objectId}/thumbnail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Thumbnail of a shared album item
+         * @description No sign-in. Redirects to a 480 px JPEG of the item, for use as `<img src>`. Not counted as a view
+         *     or as egress. 404 for an item without one and for anything not in the album.
+         */
+        get: operations["getSharedItemThumbnail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/share/{token}/items/{objectId}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview of a shared album item
+         * @description No sign-in. Redirects to a JPEG of at most 1600 px on the longest side, for the full-screen
+         *     viewer. Counts a view of the item; not counted as egress. 404 for an item without one (videos,
+         *     documents, unsupported photo formats; use `/content`) and for anything not in the album.
+         */
+        get: operations["getSharedItemPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/share/{token}/items/{objectId}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A shared album item
+         * @description No sign-in. The item's bytes, with the same delivery modes and headers as `downloadObject`.
+         *     Counts a view of the item, or with `download=true` a download of the item and of the link (sent
+         *     as an attachment). Counted as egress. 404 for anything not in the album.
+         */
+        get: operations["downloadSharedItem"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/share/{token}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The whole shared album as a ZIP
+         * @description No sign-in, album links only. Streams a store-only ZIP of the album's current items, named
+         *     `<album name>/<filename>` (made unique). Counts one download of the link; the total size counts
+         *     as egress, and the request is refused with `429 QUOTA_EGRESS_EXCEEDED` when the owner's allowance
+         *     is used up.
+         */
+        get: operations["downloadSharedAlbum"];
         put?: never;
         post?: never;
         delete?: never;
@@ -543,6 +656,202 @@ export interface paths {
          *     client should show a generic tile. Previews are small and are not counted as egress.
          */
         get: operations["getThumbnail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/objects/{id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A larger preview picture for the viewer
+         * @description Returns a short-lived URL of a JPEG preview of at most 1600 px on the longest side (never larger
+         *     than the photo), made the first time it is asked for and kept, like the thumbnail. Use it in a
+         *     full-screen viewer instead of the original. Same formats as the thumbnail; any other file answers
+         *     404. Not counted as egress.
+         */
+        get: operations["getPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/albums": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The tenant's albums
+         * @description Most recently changed first. API keys must cover all namespaces.
+         */
+        get: operations["listAlbums"];
+        put?: never;
+        /**
+         * Make an album, optionally with files
+         * @description "Add to new album": creates an album with the given files as its items, in the given order.
+         *     An empty `objectIds` makes an empty album. The whole request is refused (`400`, with
+         *     `details.unknownObjectIds`) if any file is unknown, deleted or another tenant's. Needs the member
+         *     role (or a read-write API key for all namespaces). An album holds at most a configured number of
+         *     files (default 2000); at most 500 ids per request. Photos added get their thumbnail and preview
+         *     made in the background.
+         */
+        post: operations["createAlbum"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/albums/membership": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Which albums files are in
+         * @description For each given file (at most 500), the albums it is in, with each album's name and whether it has
+         *     an active share link. Unknown ids get an empty list. Use it to mark files that are already in an
+         *     album.
+         */
+        post: operations["getAlbumMembership"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/albums/{albumId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One album */
+        get: operations["getAlbum"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete an album
+         * @description The files stay. The album's share links stop working.
+         */
+        delete: operations["deleteAlbum"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename, describe, pick the cover or the upload folder
+         * @description Fields left out are unchanged. An empty `description` clears it. `coverObjectId` must be an item
+         *     of the album; `clearCover: true` goes back to the first photo. `uploadNamespace` is the folder
+         *     that files uploaded from the album go into (needs write access to it); an empty string resets it.
+         */
+        patch: operations["updateAlbum"];
+        trace?: never;
+    };
+    "/v1/albums/{albumId}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An album's items
+         * @description In album order. Deleted files are left out (and come back if undeleted). Items still uploading or
+         *     being verified are included with their `status`.
+         */
+        get: operations["listAlbumItems"];
+        put?: never;
+        /**
+         * Add files to an album
+         * @description Adds the files at the end, in the given order, skipping ones already in the album, and reports
+         *     both counts. The whole request is refused if any file is unknown, deleted or another tenant's, or
+         *     if the album would pass its limit. While the album has an active share link, adding a file also
+         *     needs write access to the file's namespace.
+         */
+        post: operations["addAlbumItems"];
+        /**
+         * Remove files from an album
+         * @description The files stay; ids that are not in the album are ignored.
+         */
+        delete: operations["removeAlbumItems"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/albums/{albumId}/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Reorder an album
+         * @description Puts the given items first, in the given order; the others follow in their current order.
+         */
+        put: operations["reorderAlbum"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/albums/{albumId}/shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Share an album with a link
+         * @description Creates a link that anyone can open to see the album as a gallery and view or download its items
+         *     without signing in. Visitors see the album's current items. Needs write access to the namespace of
+         *     every item. Same body as `createShare`.
+         */
+        post: operations["createAlbumShare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shares/{shareId}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Per-item counts of an album link
+         * @description Views and downloads of each item of an album link, most viewed first. Counts are requests, not
+         *     people: a refresh counts again, and no IP address, cookie or device detail is stored.
+         */
+        get: operations["listShareItemStats"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1873,9 +2182,25 @@ export interface components {
         Share: {
             /** Format: uuid */
             id: string;
-            /** Format: uuid */
-            objectId: string;
-            filename: string;
+            /**
+             * @description What the link points at.
+             * @enum {string}
+             */
+            target: "file" | "album";
+            /**
+             * Format: uuid
+             * @description Set for file links.
+             */
+            objectId?: string | null;
+            /**
+             * Format: uuid
+             * @description Set for album links.
+             */
+            albumId?: string | null;
+            /** @description The file name or the album name. */
+            name: string;
+            /** @description The file name; null for album links. */
+            filename?: string | null;
             /** @description The secret part of the link; treat it like a password. */
             token: string;
             description?: string | null;
@@ -1883,16 +2208,51 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             expiresAt?: string | null;
+            /**
+             * Format: int64
+             * @description Downloads of the file
+             */
+            downloads: number;
+            /**
+             * Format: int64
+             * @description Times the link was opened (requests
+             */
+            views: number;
+            /** Format: date-time */
+            lastViewedAt?: string | null;
+        };
+        ShareItemStat: {
+            /** Format: uuid */
+            objectId: string;
+            filename: string;
+            /**
+             * Format: int64
+             * @description Opened in the viewer (preview or inline content).
+             */
+            views: number;
             /** Format: int64 */
             downloads: number;
         };
-        SharedFile: {
-            filename: string;
-            /** Format: int64 */
-            size: number;
-            contentType: string;
+        SharedLink: {
             /** @enum {string} */
-            kind: "image" | "video" | "audio" | "pdf" | "other";
+            target: "file" | "album";
+            /** @description The file name or the album name. */
+            name: string;
+            /** @description File links only. */
+            filename?: string | null;
+            /**
+             * Format: int64
+             * @description The file's size
+             */
+            size: number;
+            /** @description File links only. */
+            contentType?: string | null;
+            /**
+             * @description File links only.
+             * @enum {string|null}
+             */
+            kind?: "image" | "video" | "audio" | "pdf" | "other" | null;
+            /** @description The link's description, else the album's. */
             description?: string | null;
             /** @description The owner's display name */
             sharedBy?: string;
@@ -1900,6 +2260,116 @@ export interface components {
             sharedAt: string;
             /** Format: date-time */
             expiresAt?: string | null;
+            /**
+             * Format: int64
+             * @description Album links only.
+             */
+            itemCount?: number | null;
+            /**
+             * Format: uuid
+             * @description Album links only.
+             */
+            coverObjectId?: string | null;
+        };
+        SharedItem: {
+            /** Format: uuid */
+            objectId: string;
+            filename: string;
+            contentType: string;
+            /** @enum {string} */
+            kind: "image" | "video" | "audio" | "pdf" | "other";
+            /** Format: int64 */
+            size: number;
+            /** @description True if /thumbnail and /preview exist for the item. */
+            thumbnail: boolean;
+        };
+        SharedItemPage: {
+            items: components["schemas"]["SharedItem"][];
+            nextCursor?: string | null;
+        };
+        Album: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description?: string | null;
+            /** Format: int64 */
+            itemCount: number;
+            /** Format: int64 */
+            totalSize: number;
+            /**
+             * Format: uuid
+             * @description The chosen cover
+             */
+            coverObjectId?: string | null;
+            /** @description Folder for files uploaded from the album; null for the default. */
+            uploadNamespace?: string | null;
+            /** @description True while the album has an active share link. */
+            shared: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        AlbumItem: {
+            /** Format: uuid */
+            objectId: string;
+            namespace: string;
+            filename: string;
+            /** @description The effective type (derived from the extension when stored as generic). */
+            contentType: string;
+            /** @enum {string} */
+            kind: "image" | "video" | "audio" | "pdf" | "other";
+            /** Format: int64 */
+            size: number;
+            /** @description The current version's status. */
+            status: string;
+            /** @description True if a thumbnail and a preview can be made. */
+            thumbnail: boolean;
+            /** Format: date-time */
+            addedAt: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        AlbumItemPage: {
+            items: components["schemas"]["AlbumItem"][];
+            nextCursor?: string | null;
+        };
+        CreateAlbum: {
+            name: string;
+            description?: string | null;
+            objectIds?: string[];
+        };
+        UpdateAlbum: {
+            name?: string | null;
+            description?: string | null;
+            /** Format: uuid */
+            coverObjectId?: string | null;
+            clearCover?: boolean | null;
+            uploadNamespace?: string | null;
+        };
+        ObjectIds: {
+            objectIds: string[];
+        };
+        AlbumAddResult: {
+            added: number;
+            /** @description Files that were already in the album and were skipped. */
+            alreadyIn: number;
+            /** Format: int64 */
+            itemCount: number;
+        };
+        AlbumRemoved: {
+            removed: number;
+        };
+        AlbumRef: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            shared: boolean;
+        };
+        AlbumMembership: {
+            /** Format: uuid */
+            objectId: string;
+            albums: components["schemas"]["AlbumRef"][];
         };
         ShareResponse: components["schemas"]["Envelope"] & {
             data?: components["schemas"]["Share"];
@@ -1907,8 +2377,32 @@ export interface components {
         ShareListResponse: components["schemas"]["Envelope"] & {
             data?: components["schemas"]["Share"][];
         };
-        SharedFileResponse: components["schemas"]["Envelope"] & {
-            data?: components["schemas"]["SharedFile"];
+        SharedLinkResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["SharedLink"];
+        };
+        SharedItemPageResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["SharedItemPage"];
+        };
+        ShareItemStatListResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["ShareItemStat"][];
+        };
+        AlbumResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["Album"];
+        };
+        AlbumListResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["Album"][];
+        };
+        AlbumItemPageResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["AlbumItemPage"];
+        };
+        AlbumAddResultResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["AlbumAddResult"];
+        };
+        AlbumRemovedResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["AlbumRemoved"];
+        };
+        AlbumMembershipResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["AlbumMembership"][];
         };
         ThumbnailInfo: {
             url: string;
@@ -2074,6 +2568,15 @@ export interface components {
         NotModified: {
             headers: {
                 ETag: components["headers"]["ETag"];
+                [name: string]: unknown;
+            };
+            content?: never;
+        };
+        /** @description Follow `Location` (a presigned URL of a JPEG, valid for a few minutes). */
+        PictureRedirect: {
+            headers: {
+                Location: string;
+                "Cache-Control"?: "private, max-age=60";
                 [name: string]: unknown;
             };
             content?: never;
@@ -2325,6 +2828,15 @@ export interface components {
         };
     };
     parameters: {
+        AlbumId: string;
+        /** @description The secret part of a share link. */
+        ShareToken: string;
+        /** @description Id of an item of the shared album. */
+        ShareItemId: string;
+        /** @description `nextCursor` of the previous page. */
+        PageCursor: string;
+        /** @description Items per page (1 to 200, default 100). */
+        PageLimit: number;
         /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
         XDepotTenant: components["schemas"]["TenantSlug"];
         /** @description Makes `createUpload` safe to retry. */
@@ -3259,7 +3771,10 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Links that are not revoked or expired, newest first. */
+            /**
+             * @description Links to files and albums that are not revoked or expired, newest first, with how often each
+             *     was opened (`views`) and downloaded. Counts are requests, not people.
+             */
             200: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -3317,7 +3832,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SharedFileResponse"];
+                    "application/json": components["schemas"]["SharedLinkResponse"];
                 };
             };
             404: components["responses"]["NotFound"];
@@ -3354,6 +3869,136 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
         };
     };
+    listSharedAlbumItems: {
+        parameters: {
+            query?: {
+                /** @description `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["PageCursor"];
+                /** @description Items per page (1 to 200, default 100). */
+                limit?: components["parameters"]["PageLimit"];
+            };
+            header?: never;
+            path: {
+                /** @description The secret part of a share link. */
+                token: components["parameters"]["ShareToken"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of items. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedItemPageResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getSharedItemThumbnail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The secret part of a share link. */
+                token: components["parameters"]["ShareToken"];
+                /** @description Id of an item of the shared album. */
+                objectId: components["parameters"]["ShareItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            307: components["responses"]["PictureRedirect"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getSharedItemPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The secret part of a share link. */
+                token: components["parameters"]["ShareToken"];
+                /** @description Id of an item of the shared album. */
+                objectId: components["parameters"]["ShareItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            307: components["responses"]["PictureRedirect"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    downloadSharedItem: {
+        parameters: {
+            query?: {
+                /** @description `redirect`: 307 to a presigned URL. `proxy`: stream through the service. */
+                mode?: components["parameters"]["DownloadMode"];
+                download?: boolean;
+            };
+            header?: {
+                /** @description A single byte range (`bytes=0-1023`, `bytes=1024-`, `bytes=-500`). `mode=proxy` only. */
+                Range?: components["parameters"]["Range"];
+                /** @description Send the full content instead of the range when this ETag is stale. */
+                "If-Range"?: components["parameters"]["IfRange"];
+                /** @description Answers `304` when it matches the version's ETag. */
+                "If-None-Match"?: components["parameters"]["IfNoneMatch"];
+            };
+            path: {
+                /** @description The secret part of a share link. */
+                token: components["parameters"]["ShareToken"];
+                /** @description Id of an item of the shared album. */
+                objectId: components["parameters"]["ShareItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Content"];
+            206: components["responses"]["PartialContent"];
+            304: components["responses"]["NotModified"];
+            307: components["responses"]["Redirect"];
+            404: components["responses"]["NotFound"];
+            416: components["responses"]["RangeNotSatisfiable"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    downloadSharedAlbum: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The secret part of a share link. */
+                token: components["parameters"]["ShareToken"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The archive. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    "Content-Length"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
     getThumbnail: {
         parameters: {
             query?: never;
@@ -3384,6 +4029,415 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getPreview: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                /** @description Object id. */
+                id: components["parameters"]["ObjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The preview URL. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThumbnailInfoResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    listAlbums: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The albums. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlbumListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createAlbum: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAlbum"];
+            };
+        };
+        responses: {
+            /** @description The album. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlbumResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getAlbumMembership: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObjectIds"];
+            };
+        };
+        responses: {
+            /** @description One entry per requested id, in request order. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlbumMembershipResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getAlbum: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                albumId: components["parameters"]["AlbumId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The album. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlbumResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteAlbum: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                albumId: components["parameters"]["AlbumId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The album is gone. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateAlbum: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                albumId: components["parameters"]["AlbumId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAlbum"];
+            };
+        };
+        responses: {
+            /** @description The album. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlbumResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listAlbumItems: {
+        parameters: {
+            query?: {
+                /** @description `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["PageCursor"];
+                /** @description Items per page (1 to 200, default 100). */
+                limit?: components["parameters"]["PageLimit"];
+            };
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                albumId: components["parameters"]["AlbumId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of items. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlbumItemPageResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    addAlbumItems: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                albumId: components["parameters"]["AlbumId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObjectIds"];
+            };
+        };
+        responses: {
+            /** @description What was added. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlbumAddResultResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    removeAlbumItems: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                albumId: components["parameters"]["AlbumId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObjectIds"];
+            };
+        };
+        responses: {
+            /** @description How many were removed. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlbumRemovedResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    reorderAlbum: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                albumId: components["parameters"]["AlbumId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObjectIds"];
+            };
+        };
+        responses: {
+            /** @description Reordered. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createAlbumShare: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                albumId: components["parameters"]["AlbumId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    description?: string | null;
+                    expiresInDays?: number | null;
+                };
+            };
+        };
+        responses: {
+            /** @description The link. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShareResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listShareItemStats: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The counts. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShareItemStatListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     undeleteObject: {
