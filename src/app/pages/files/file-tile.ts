@@ -1,4 +1,5 @@
 import { Component, ElementRef, inject, input, OnDestroy, OnInit, output, signal } from '@angular/core';
+import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
 import { formatBytes } from '../../core/ui/format';
 import { hasPicture, kindIcon, kindOf } from '../../core/ui/media';
@@ -14,12 +15,19 @@ export interface TileFile {
 /** Album marks on a tile: in an album, or in a shared album. */
 export type TileMark = 'album' | 'shared' | null;
 
-/** Only a few previews are requested at once, so a long list does not flood the service. */
+/**
+ * Only two pictures are asked for at once, the number the service makes at the same time; the
+ * first view of a folder of large photos makes their thumbnails one by one.
+ */
+const MAX_IN_FLIGHT = 2;
+/** Busy or briefly unreachable: ask again after 2 s, 4 s, 6 s … up to this many times. */
+const RETRIES = 8;
+const RETRYABLE = new Set<ApiError['reason']>(['RATE_LIMITED', 'STORAGE_UNAVAILABLE', 'NETWORK_ERROR']);
 let inFlight = 0;
 const waiting: Array<() => void> = [];
 
 function acquire(): Promise<void> {
-  if (inFlight < 4) {
+  if (inFlight < MAX_IN_FLIGHT) {
     inFlight++;
     return Promise.resolve();
   }
@@ -105,6 +113,8 @@ export class FileTile implements OnInit, OnDestroy {
   protected readonly url = signal<string | null>(null);
   protected readonly bytes = formatBytes;
   private observer?: IntersectionObserver;
+  private retryTimer?: ReturnType<typeof setTimeout>;
+  private destroyed = false;
 
   protected kind() {
     return kindOf(this.file().filename, this.file().contentType);
@@ -139,14 +149,26 @@ export class FileTile implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.destroyed = true;
     this.observer?.disconnect();
+    clearTimeout(this.retryTimer);
   }
 
-  private async load(): Promise<void> {
+  private async load(attempt = 1): Promise<void> {
     await acquire();
+    if (this.destroyed) {
+      release();
+      return;
+    }
     this.api.thumbnail(this.file().objectId).subscribe({
       next: (t) => { this.url.set(t.url); release(); },
-      error: () => release(),     // no preview for this file: keep the simple tile
+      error: (e: unknown) => {
+        release();
+        // Busy making other thumbnails: try again shortly. Anything else (no picture): keep the tile.
+        if (RETRYABLE.has(ApiError.from(e).reason) && attempt < RETRIES && !this.destroyed) {
+          this.retryTimer = setTimeout(() => void this.load(attempt + 1), 2000 * attempt);
+        }
+      },
     });
   }
 }
