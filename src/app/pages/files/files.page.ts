@@ -9,6 +9,7 @@ import {
 } from '@ionic/angular';
 import { ApiError } from '../../core/api/api-error';
 import { FileTile, type TileMark } from './file-tile';
+import { RowThumb } from './row-thumb';
 import { DepotApi } from '../../core/api/depot-api.service';
 import type { Album, AlbumRef, Namespace, ObjectResult, SearchHit } from '../../core/api/models';
 import { AlbumDialogs } from '../../core/ui/album-dialogs.service';
@@ -44,7 +45,7 @@ interface UploadJob {
 @Component({
   selector: 'app-files',
   imports: [
-    DatePipe, FileTile, MediaViewer, RouterLink, IonButton, IonCheckbox, IonItem, IonLabel, IonList, IonNote,
+    DatePipe, FileTile, MediaViewer, RowThumb, RouterLink, IonButton, IonCheckbox, IonItem, IonLabel, IonList, IonNote,
     IonProgressBar, IonSearchbar, IonSelect, IonSelectOption, IonSpinner, IonText,
   ],
   template: `
@@ -173,6 +174,8 @@ interface UploadJob {
               <ion-checkbox slot="start" [checked]="selected().has(hit.objectId)"
                 [attr.aria-label]="'Select ' + hit.filename" (click)="$event.preventDefault()" />
             }
+            <app-row-thumb slot="start" [objectId]="hit.objectId" [filename]="hit.filename"
+              [contentType]="hit.contentType" />
             <ion-label>
               <h2>
                 {{ hit.filename }}

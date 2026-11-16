@@ -58,7 +58,10 @@ const KIND_LABEL: Record<string, string> = {
           @if (!cannotShow()) {
             @switch (l.kind) {
               @case ('image') {
-                <div class="viewer"><img [src]="src()" [alt]="l.filename" (error)="cannotShow.set(true)" /></div>
+                <div class="viewer">
+                  <img [src]="usePreview() && l.thumbnail ? previewSrc() : src()" [alt]="l.filename"
+                    (error)="onImageError(l)" />
+                </div>
               }
               @case ('video') {
                 <div class="viewer">
@@ -193,6 +196,22 @@ export class SharePage implements OnInit {
 
   protected src(): string {
     return this.api.sharedContentUrl(this.token);
+  }
+
+  /** Photos show the 1600 px preview; the original loads only on Download. */
+  protected readonly usePreview = signal(true);
+
+  protected previewSrc(): string {
+    return this.api.sharedPreviewUrl(this.token);
+  }
+
+  /** A failed preview falls back to the original once; a failed original means "can't show". */
+  protected onImageError(l: SharedLink): void {
+    if (this.usePreview() && l.thumbnail) {
+      this.usePreview.set(false);
+    } else {
+      this.cannotShow.set(true);
+    }
   }
 
   protected downloadUrl(): string {

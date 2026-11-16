@@ -14,7 +14,7 @@ import {
 import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
 import type { AlbumRef, DepotObject, Namespace, Progress, Share, Version, ViewInfo } from '../../core/api/models';
-import { linkStats } from '../../core/ui/media';
+import { hasPicture, linkStats } from '../../core/ui/media';
 import { canShareNatively, fileMessage, messageText, shareNatively, type ShareMessage } from '../../core/ui/share-message';
 import { SessionService } from '../../core/tenant/session.service';
 import { describeError, formatBytes } from '../../core/ui/format';
@@ -395,13 +395,31 @@ export class ObjectPage implements OnInit, OnDestroy {
     });
   }
 
-  /** Asks for the viewer URL once the file is ready; failures just mean no preview. */
+  /**
+   * Asks for what to show once the file is ready. Photos show the 1600 px preview, so opening the
+   * page does not load (or count as a download of) the whole original; other media use the view URL.
+   * Failures just mean no picture.
+   */
   private loadView(o: DepotObject): void {
-    const ready = o.status === 'ACTIVE' && o.latest?.status === 'READY' && !this.view();
-    if (!ready) {
+    const latest = o.latest;
+    const ready = o.status === 'ACTIVE' && latest?.status === 'READY' && !this.view();
+    if (!ready || !latest) {
       return;
     }
-    this.api.view(this.id).subscribe({ next: (v) => this.view.set(v), error: () => undefined });
+    const original = (): void => {
+      this.api.view(this.id).subscribe({ next: (v) => this.view.set(v), error: () => undefined });
+    };
+    if (!hasPicture(latest.filename, latest.contentType)) {
+      original();
+      return;
+    }
+    this.api.preview(this.id).subscribe({
+      next: (p) => this.view.set({
+        objectId: o.objectId, versionId: latest.versionId, filename: latest.filename,
+        contentType: 'image/jpeg', kind: 'image', size: latest.size, url: p.url, expiresAt: p.expiresAt,
+      }),
+      error: () => original(),
+    });
   }
 
   /** Polls while the current version is still uploading or being verified. */

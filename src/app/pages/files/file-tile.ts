@@ -1,8 +1,8 @@
 import { Component, ElementRef, inject, input, OnDestroy, OnInit, output, signal } from '@angular/core';
-import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
 import { formatBytes } from '../../core/ui/format';
 import { hasPicture, kindIcon, kindOf } from '../../core/ui/media';
+import { loadThumbnail, whenVisible } from '../../core/ui/thumbnail-loader';
 
 /** What a tile needs to know about a file. */
 export interface TileFile {
@@ -14,30 +14,6 @@ export interface TileFile {
 
 /** Album marks on a tile: in an album, or in a shared album. */
 export type TileMark = 'album' | 'shared' | null;
-
-/**
- * Only two pictures are asked for at once, the number the service makes at the same time; the
- * first view of a folder of large photos makes their thumbnails one by one.
- */
-const MAX_IN_FLIGHT = 2;
-/** Busy or briefly unreachable: ask again after 2 s, 4 s, 6 s … up to this many times. */
-const RETRIES = 8;
-const RETRYABLE = new Set<ApiError['reason']>(['RATE_LIMITED', 'STORAGE_UNAVAILABLE', 'NETWORK_ERROR']);
-let inFlight = 0;
-const waiting: Array<() => void> = [];
-
-function acquire(): Promise<void> {
-  if (inFlight < MAX_IN_FLIGHT) {
-    inFlight++;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => waiting.push(() => { inFlight++; resolve(); }));
-}
-
-function release(): void {
-  inFlight--;
-  waiting.shift()?.();
-}
 
 /**
  * One file in a gallery: a preview picture for photos, a simple tile for everything else. Clicking
@@ -112,8 +88,7 @@ export class FileTile implements OnInit, OnDestroy {
 
   protected readonly url = signal<string | null>(null);
   protected readonly bytes = formatBytes;
-  private observer?: IntersectionObserver;
-  private retryTimer?: ReturnType<typeof setTimeout>;
+  private stopWatching?: () => void;
   private destroyed = false;
 
   protected kind() {
@@ -138,37 +113,14 @@ export class FileTile implements OnInit, OnDestroy {
     if (!hasPicture(this.file().filename, this.file().contentType)) {
       return;
     }
-    // Ask for the preview only when the tile scrolls into view.
-    this.observer = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) {
-        this.observer?.disconnect();
-        void this.load();
-      }
-    }, { rootMargin: '200px' });
-    this.observer.observe(this.el.nativeElement);
+    // Ask for the thumbnail only when the tile scrolls into view.
+    this.stopWatching = whenVisible(this.el.nativeElement, () => {
+      void loadThumbnail(this.api, this.file().objectId, () => !this.destroyed).then((u) => u && this.url.set(u));
+    });
   }
 
   ngOnDestroy(): void {
     this.destroyed = true;
-    this.observer?.disconnect();
-    clearTimeout(this.retryTimer);
-  }
-
-  private async load(attempt = 1): Promise<void> {
-    await acquire();
-    if (this.destroyed) {
-      release();
-      return;
-    }
-    this.api.thumbnail(this.file().objectId).subscribe({
-      next: (t) => { this.url.set(t.url); release(); },
-      error: (e: unknown) => {
-        release();
-        // Busy making other thumbnails: try again shortly. Anything else (no picture): keep the tile.
-        if (RETRYABLE.has(ApiError.from(e).reason) && attempt < RETRIES && !this.destroyed) {
-          this.retryTimer = setTimeout(() => void this.load(attempt + 1), 2000 * attempt);
-        }
-      },
-    });
+    this.stopWatching?.();
   }
 }

@@ -1,0 +1,4 @@
+# Filled in when the container starts (nginx image entrypoint, envsubst): the cluster's DNS server
+# and the public Depot API, used for chat-app link previews.
+resolver ${NGINX_LOCAL_RESOLVERS} valid=30s ipv6=off;
+set $depot_api_origin "${DEPOT_API_ORIGIN}";

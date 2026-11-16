@@ -913,6 +913,61 @@ paths:
         '416': { $ref: '#/components/responses/RangeNotSatisfiable' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
 
+  /v1/share/{token}/thumbnail:
+    get:
+      tags: [Sharing]
+      operationId: getSharedLinkThumbnail
+      summary: The link's picture
+      description: |
+        No sign-in. Redirects to a 480 px JPEG: the photo of a file link, or an album's cover. Used for
+        chat-app previews. Not counted as a view or as egress. 404 when there is no picture.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ShareToken'
+      responses:
+        '307': { $ref: '#/components/responses/PictureRedirect' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /v1/share/{token}/preview:
+    get:
+      tags: [Sharing]
+      operationId: getSharedFilePreview
+      summary: Preview of a shared photo
+      description: |
+        No sign-in, file links only. Redirects to a JPEG of at most 1600 px, so the visitor page shows the
+        photo without loading the original. Not counted as egress. 404 for album links (use the item
+        endpoints) and for files without one.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ShareToken'
+      responses:
+        '307': { $ref: '#/components/responses/PictureRedirect' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /v1/share/{token}/card:
+    get:
+      tags: [Sharing]
+      operationId: getShareCard
+      summary: Link preview page for chat apps
+      description: |
+        No sign-in. A small HTML page whose `og:` and `twitter:` tags give chat apps (WhatsApp, Telegram,
+        Facebook and others) the link's title, description and picture; the Console's web server sends
+        their requests for `/depot-console/s/{token}` here. Every value is HTML-escaped. Not counted as a
+        view. A link that does not work answers 404 with a neutral page.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ShareToken'
+      responses:
+        '200':
+          description: The preview page.
+          content:
+            text/html:
+              schema: { type: string }
+        '404':
+          description: The link does not work; a neutral page.
+          content:
+            text/html:
+              schema: { type: string }
   /v1/share/{token}/items:
     get:
       tags: [Sharing]
@@ -3264,7 +3319,7 @@ components:
         downloads: { type: integer, format: int64 }
     SharedLink:
       type: object
-      required: [target, name, size, sharedAt]
+      required: [target, name, size, sharedAt, thumbnail]
       properties:
         target: { type: string, enum: [file, album] }
         name: { type: string, description: The file name or the album name. }
@@ -3278,6 +3333,9 @@ components:
         expiresAt: { type: [string, 'null'], format: date-time }
         itemCount: { type: [integer, 'null'], format: int64, description: Album links only. }
         coverObjectId: { type: [string, 'null'], format: uuid, description: Album links only. }
+        thumbnail:
+          type: boolean
+          description: True if `/thumbnail` exists for the link (and, for file links, `/preview`).
     SharedItem:
       type: object
       required: [objectId, filename, contentType, kind, size, thumbnail]

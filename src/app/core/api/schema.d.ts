@@ -532,6 +532,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/share/{token}/thumbnail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The link's picture
+         * @description No sign-in. Redirects to a 480 px JPEG: the photo of a file link, or an album's cover. Used for
+         *     chat-app previews. Not counted as a view or as egress. 404 when there is no picture.
+         */
+        get: operations["getSharedLinkThumbnail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/share/{token}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview of a shared photo
+         * @description No sign-in, file links only. Redirects to a JPEG of at most 1600 px, so the visitor page shows the
+         *     photo without loading the original. Not counted as egress. 404 for album links (use the item
+         *     endpoints) and for files without one.
+         */
+        get: operations["getSharedFilePreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/share/{token}/card": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Link preview page for chat apps
+         * @description No sign-in. A small HTML page whose `og:` and `twitter:` tags give chat apps (WhatsApp, Telegram,
+         *     Facebook and others) the link's title, description and picture; the Console's web server sends
+         *     their requests for `/depot-console/s/{token}` here. Every value is HTML-escaped. Not counted as a
+         *     view. A link that does not work answers 404 with a neutral page.
+         */
+        get: operations["getShareCard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/share/{token}/items": {
         parameters: {
             query?: never;
@@ -2270,6 +2336,8 @@ export interface components {
              * @description Album links only.
              */
             coverObjectId?: string | null;
+            /** @description True if `/thumbnail` exists for the link (and, for file links, `/preview`). */
+            thumbnail: boolean;
         };
         SharedItem: {
             /** Format: uuid */
@@ -3867,6 +3935,72 @@ export interface operations {
             404: components["responses"]["NotFound"];
             416: components["responses"]["RangeNotSatisfiable"];
             429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getSharedLinkThumbnail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The secret part of a share link. */
+                token: components["parameters"]["ShareToken"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            307: components["responses"]["PictureRedirect"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getSharedFilePreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The secret part of a share link. */
+                token: components["parameters"]["ShareToken"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            307: components["responses"]["PictureRedirect"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getShareCard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The secret part of a share link. */
+                token: components["parameters"]["ShareToken"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The preview page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description The link does not work; a neutral page. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
         };
     };
     listSharedAlbumItems: {

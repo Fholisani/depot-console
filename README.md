@@ -11,6 +11,13 @@ Argo CD app `depot-console` then rolls it out.
 
 How to open the active and passive Console, sign in, and call the API: [docs/ACCESS.md](docs/ACCESS.md).
 
+## Link previews in chat apps
+WhatsApp, Telegram and other apps read `og:` tags from a link's HTML and do not run JavaScript. nginx
+sends their requests for a share link `/depot-console/s/<token>` to the API's preview page
+(`/v1/share/<token>/card`), and `/depot-console/s/<token>/cover.jpg` to the link's thumbnail. Links
+with `?slot=passive` go to the passive API (`X-Slot: Passive`), since crawlers carry no cookie. The API
+origin is `DEPOT_API_ORIGIN` (Dockerfile); the DNS server is read from the container at start.
+
 ## Requirements
 
 Node 24 (Angular 22 needs `^22.22.3` or `^24.15`). With nvm: `nvm use 24`.

@@ -289,6 +289,11 @@ export class DepotApi {
       + (part === 'content' && download ? '?download=true' : ''));
   }
 
+  /** Public URL of a shared photo's 1600 px preview (file links). */
+  sharedPreviewUrl(token: string): string {
+    return this.url(`/v1/share/${encodeURIComponent(token)}/preview`);
+  }
+
   /** Public URL of the whole shared album as a ZIP. */
   sharedArchiveUrl(token: string): string {
     return this.url(`/v1/share/${encodeURIComponent(token)}/archive`);
