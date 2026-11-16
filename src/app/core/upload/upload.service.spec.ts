@@ -45,6 +45,21 @@ const settle = async (): Promise<void> => {
   }
 };
 
+/**
+ * Waits until `condition` holds. Parts are hashed with real SHA-256 before they are sent, which
+ * takes longer on a busy machine than a fixed number of ticks, so tests wait for the state they need.
+ */
+const until = async (condition: () => boolean, what: string, timeoutMs = 10_000): Promise<void> => {
+  const end = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > end) {
+      throw new Error(`timed out waiting for ${what}`);
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  await settle();
+};
+
 describe('UploadTask pause and resume', () => {
   const received = new Map<number, number>();
   let phases: UploadProgress[];
@@ -89,14 +104,12 @@ describe('UploadTask pause and resume', () => {
     const file = new File([new ArrayBuffer(70 * MIB)], 'big.lrf');
     const task = new UploadTask(api, 'default', file, (p) => phases.push(p));
     const result = task.start();
-    await settle();
-
+    await until(() => FakeXhr.all.length >= 3, 'three parts on the wire');
     // Three parts (the concurrency limit) are on the wire; none has finished.
     expect(FakeXhr.all.map((x) => x.url)).toEqual(['part-1', 'part-2', 'part-3']);
 
     task.pause();
-    await settle();
-
+    await until(() => phases.at(-1)?.phase === 'pausing', 'pausing');
     // Pausing must not throw away what is already being sent.
     expect(FakeXhr.all.every((x) => !x.aborted)).toBe(true);
     expect(phases.at(-1)?.phase).toBe('pausing');
@@ -105,15 +118,13 @@ describe('UploadTask pause and resume', () => {
     finishPart(1);
     finishPart(2);
     finishPart(3);
-    await settle();
-
+    await until(() => phases.at(-1)?.phase === 'paused', 'paused');
     expect(phases.at(-1)?.phase).toBe('paused');
     expect(phases.at(-1)?.percent).toBeGreaterThanOrEqual(68);   // 48 of 70 MiB kept, not 0
     expect(FakeXhr.all).toHaveLength(3);
 
     task.resume();
-    await settle();
-
+    await until(() => FakeXhr.all.length >= 5, 'the two missing parts');
     // Only the two missing parts are sent after resume.
     expect(FakeXhr.all.slice(3).map((x) => x.url).sort()).toEqual(['part-4', 'part-5']);
     finishPart(4);
@@ -126,12 +137,12 @@ describe('UploadTask pause and resume', () => {
     const file = new File([new ArrayBuffer(70 * MIB)], 'big.lrf');
     const task = new UploadTask(api, 'default', file, (p) => phases.push(p));
     void task.start().catch(() => undefined);
-    await settle();
+    await until(() => FakeXhr.all.length >= 3, 'three parts on the wire');
     finishPart(1);
     finishPart(2);
     finishPart(3);
     task.pause();
-    await settle();
+    await until(() => phases.at(-1)?.phase === 'paused', 'paused');
     expect(phases.at(-1)?.phase).toBe('paused');
     task.cancel();
   });
@@ -140,7 +151,7 @@ describe('UploadTask pause and resume', () => {
     const file = new File([new ArrayBuffer(70 * MIB)], 'big.lrf');
     const task = new UploadTask(api, 'default', file, (p) => phases.push(p));
     const result = task.start();
-    await settle();
+    await until(() => FakeXhr.all.length >= 3, 'three parts on the wire');
     task.cancel();
     await expect(result).rejects.toThrow('Upload cancelled');
     expect(FakeXhr.all.every((x) => x.aborted)).toBe(true);
