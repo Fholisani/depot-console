@@ -1,4 +1,5 @@
-import { of } from 'rxjs';
+import { HttpErrorResponse, HttpEventType } from '@angular/common/http';
+import { of, throwError } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DepotApi } from '../api/depot-api.service';
 import { UploadProgress, UploadTask } from './upload.service';
@@ -155,5 +156,51 @@ describe('UploadTask pause and resume', () => {
     task.cancel();
     await expect(result).rejects.toThrow('Upload cancelled');
     expect(FakeXhr.all.every((x) => x.aborted)).toBe(true);
+  });
+});
+
+describe('UploadTask small-file retry', () => {
+  const storageDown = (): HttpErrorResponse => new HttpErrorResponse({
+    status: 503,
+    error: { data: null, message: 'STORAGE_UNAVAILABLE',
+      errors: [{ code: 3501, message: 'The blob store is unreachable', reason: 'STORAGE_UNAVAILABLE' }] },
+  });
+  const ok = of({ type: HttpEventType.Response, body: { data: { objectId: 'o1', status: 'READY' } } });
+
+  afterEach(() => vi.useRealTimers());
+
+  const run = async (responses: unknown[]): Promise<{ result: Promise<unknown>; calls: () => number }> => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const api = {
+      uploadSimple: () => responses[Math.min(calls++, responses.length - 1)],
+    } as unknown as DepotApi;
+    const task = new UploadTask(api, 'default', new File([new Uint8Array(10)], 'a.jpg'), () => undefined);
+    const result = task.start();
+    result.catch(() => undefined);
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(5000);
+    }
+    return { result, calls: () => calls };
+  };
+
+  it('retries when storage is briefly unavailable, then succeeds', async () => {
+    const { result, calls } = await run([throwError(storageDown), throwError(storageDown), ok]);
+    await expect(result).resolves.toMatchObject({ objectId: 'o1' });
+    expect(calls()).toBe(3);
+  });
+
+  it('gives up after three attempts and reports the storage error', async () => {
+    const { result, calls } = await run([throwError(storageDown)]);
+    await expect(result).rejects.toMatchObject({ reason: 'STORAGE_UNAVAILABLE' });
+    expect(calls()).toBe(3);
+  });
+
+  it('does not retry errors that will not go away', async () => {
+    const forbidden = new HttpErrorResponse({ status: 403, error: { data: null, message: 'x',
+      errors: [{ code: 3104, message: 'No', reason: 'INSUFFICIENT_ROLE' }] } });
+    const { result, calls } = await run([throwError(() => forbidden)]);
+    await expect(result).rejects.toMatchObject({ reason: 'INSUFFICIENT_ROLE' });
+    expect(calls()).toBe(1);
   });
 });

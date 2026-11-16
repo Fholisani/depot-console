@@ -9,6 +9,14 @@ import type { ObjectResult, PartTarget, Upload } from '../api/models';
 export const SIMPLE_LIMIT = 64 * 1024 * 1024;
 const PART_CONCURRENCY = 3;
 const PART_ATTEMPTS = 3;
+/** Attempts for a single-request upload when storage is briefly unavailable, and the wait before each retry. */
+const SIMPLE_ATTEMPTS = 3;
+const SIMPLE_RETRY_DELAYS_MS = [2000, 5000];
+
+/** Failures that may succeed if sent again: storage briefly offline, or the connection dropped. */
+function retryable(e: unknown): boolean {
+  return e instanceof ApiError && (e.reason === 'STORAGE_UNAVAILABLE' || e.reason === 'NETWORK_ERROR');
+}
 
 /** What an upload is doing right now, for the progress display. */
 /**
@@ -119,9 +127,35 @@ export class UploadTask {
   private async simple(): Promise<ObjectResult> {
     this.onProgress({ phase: 'preparing', percent: 0 });
     const sha = await sha256Hex(this.file);
-    if (this.cancelled) {
-      throw new UploadCancelled();
+    for (let attempt = 1; ; attempt++) {
+      if (this.cancelled) {
+        throw new UploadCancelled();
+      }
+      try {
+        return await this.simpleOnce(sha);
+      } catch (e) {
+        if (this.cancelled || !retryable(e) || attempt >= SIMPLE_ATTEMPTS) {
+          throw e;
+        }
+        // Storage was briefly unavailable: wait, then send the file again from the start.
+        this.onProgress({ phase: 'preparing', percent: 0 });
+        await this.wait(SIMPLE_RETRY_DELAYS_MS[attempt - 1] ?? 5000);
+      }
     }
+  }
+
+  /** Resolves after `ms`, or straight away if the upload is cancelled meanwhile. */
+  private wait(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      this.resumeWaiter = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
+  }
+
+  private simpleOnce(sha: string): Promise<ObjectResult> {
     this.onProgress({ phase: 'uploading', percent: 0 });
     return new Promise<ObjectResult>((resolve, reject) => {
       this.simpleSub = this.api.uploadSimple(this.namespace, this.file, sha).subscribe({
