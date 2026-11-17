@@ -14,6 +14,7 @@ import { currentEnvironment, shareLinkFor } from '../../core/slot/slot.service';
 import { SessionService } from '../../core/tenant/session.service';
 import { UploadCancelled, UploadPhase, UploadService, UploadTask } from '../../core/upload/upload.service';
 import { uploadStatusText } from '../../core/upload/upload-status';
+import { DuplicateGuard } from '../../core/upload/duplicate-guard.service';
 import { AlbumDialogs } from '../../core/ui/album-dialogs.service';
 import { ConfirmService } from '../../core/ui/confirm.service';
 import { describeError, formatBytes } from '../../core/ui/format';
@@ -33,6 +34,8 @@ interface AlbumUpload {
   phase?: UploadPhase;
   done?: boolean;
   error?: string;
+  /** Shown instead of "Added to the album", e.g. for a duplicate that was not uploaded again. */
+  note?: string;
 }
 
 const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
@@ -79,7 +82,7 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
           @if (u.error) {
             <ion-text color="danger"><span role="alert">{{ u.error }}</span></ion-text>
           } @else if (u.done) {
-            <ion-note>Added to the album</ion-note>
+            <ion-note>{{ u.note ?? 'Added to the album' }}</ion-note>
           } @else {
             @if (u.phase === 'preparing' || u.phase === 'finishing' || !u.phase) {
               <ion-progress-bar type="indeterminate" [attr.aria-label]="'Uploading ' + u.name" />
@@ -407,6 +410,7 @@ export class AlbumPage implements OnInit {
 
   /** Running uploads by job id, for pause, resume and cancel. */
   private readonly tasks = new Map<string, UploadTask>();
+  private readonly duplicateGuard = inject(DuplicateGuard);
 
   protected status(u: AlbumUpload): string {
     return uploadStatusText(u.phase, u.percent, u.size);
@@ -430,9 +434,26 @@ export class AlbumPage implements OnInit {
 
   /** Uploads each file into the album's folder and adds it to the album when its upload completes. */
   protected async upload(input: HTMLInputElement): Promise<void> {
-    const files = Array.from(input.files ?? []);
+    const picked = Array.from(input.files ?? []);
     input.value = '';
     const folder = this.album()?.uploadNamespace ?? 'default';
+    const { upload: files, skipped } = await this.duplicateGuard.check(folder, picked);
+    if (skipped.length > 0) {
+      // Not uploaded again: put the copy already in the folder into the album instead.
+      try {
+        await firstValueFrom(this.api.addToAlbum(this.id, skipped.map((s) => s.existing.objectId)));
+      } catch {
+        // shown as unchanged album; the upload of the others still goes ahead
+      }
+      this.uploads.update((list) => [...skipped.map((s) => ({
+        id: crypto.randomUUID(), name: s.file.name, percent: 100, size: s.file.size, done: true,
+        note: 'Already uploaded; added to the album',
+      })), ...list]);
+      if (files.length === 0) {
+        this.reload();
+        return;
+      }
+    }
     const jobs = files.map((f) => ({ id: crypto.randomUUID(), name: f.name, percent: 0, size: f.size, file: f }));
     this.uploads.update((list) => [...jobs.map(({ file: _f, ...j }) => j), ...list]);
     const update = (id: string, patch: Partial<AlbumUpload>): void =>

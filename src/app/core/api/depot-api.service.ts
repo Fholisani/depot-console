@@ -4,12 +4,7 @@ import { Observable, catchError, map, retry, throwError, timer } from 'rxjs';
 import { APP_CONFIG } from '../config/app-config';
 import { ApiError } from './api-error';
 import type {
-  ApiKey, CompleteUpload, CopyResult, CreatedApiKey, CreatedWebhook, CreateUpload, DepotObject,
-  Envelope, FirstLogin, LifecyclePreview, LifecycleRule, LifecycleRuleBody, Namespace,
-  NamespaceSettings, NewApiKey, ObjectResult, OnboardingStep, PartTarget, Progress, RestoreResult,
-  SearchResults, SignupRequest, SignupResult, Tags, Upload, UploadStatus, UsageReport, Version,
-  Share, SharedLink, SharedItemPage, ShareItemStat, ThumbnailInfo, ViewInfo, Webhook, WebhookBody, WhoAmI,
-  Album, AlbumAddResult, AlbumItemPage, AlbumMembership, AlbumRemoved, CreateAlbum, UpdateAlbum,
+  Album, AlbumAddResult, AlbumItemPage, AlbumMembership, AlbumRemoved, ApiKey, CompleteUpload, CopyResult, CreateAlbum, CreateUpload, CreatedApiKey, CreatedWebhook, DepotObject, DuplicateMatches, Envelope, FileCounts, FileGroupFilter, FilePage, FirstLogin, LifecyclePreview, LifecycleRule, LifecycleRuleBody, Namespace, NamespaceSettings, NewApiKey, ObjectResult, OnboardingStep, PartTarget, Progress, RestoreResult, SearchResults, Share, ShareItemStat, SharedItemPage, SharedLink, SignupRequest, SignupResult, Tags, ThumbnailInfo, UpdateAlbum, Upload, UploadStatus, UsageReport, Version, ViewInfo, Webhook, WebhookBody, WhoAmI,
 } from './models';
 
 /** What a shared album item's URL points at: the 480 px tile, the 1600 px preview, or the file. */
@@ -159,6 +154,28 @@ export class DepotApi {
             : throwError(() => e),
       }),
     );
+  }
+
+  /** Files newest first from the database (works while search is unavailable). */
+  files(query: { namespace?: string; group?: FileGroupFilter; size?: number; cursor?: string }): Observable<FilePage> {
+    let params = new HttpParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== '' && !(key === 'group' && value === 'all')) {
+        params = params.set(key, String(value));
+      }
+    }
+    return this.get<FilePage>('/v1/files', params);
+  }
+
+  /** How many files there are per type group. */
+  fileCounts(namespace?: string): Observable<FileCounts> {
+    const params = namespace ? new HttpParams().set('namespace', namespace) : undefined;
+    return this.get<FileCounts>('/v1/files/counts', params);
+  }
+
+  /** Which of these files the folder already holds (same name and size). */
+  duplicates(namespace: string, files: { filename: string; size: number }[]): Observable<DuplicateMatches> {
+    return this.send<DuplicateMatches>('POST', '/v1/files/duplicates', { namespace, files });
   }
 
   object(id: string): Observable<DepotObject> {

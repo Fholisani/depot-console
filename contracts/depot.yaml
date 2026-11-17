@@ -1572,6 +1572,90 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
+  # ------------------------------------------------------------------ file list (database)
+  /v1/files:
+    get:
+      tags: [Search]
+      operationId: listFiles
+      summary: List files
+      description: |
+        Files newest first, answered from the database (not search), so new uploads show at once and the
+        list works while search is unavailable. Optionally one folder and one type group. Page with
+        `nextCursor`.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - name: namespace
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/NamespaceName' }
+        - name: group
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/FileGroupFilter' }
+        - name: size
+          in: query
+          required: false
+          schema: { type: integer, format: int32, minimum: 1, maximum: 200, default: 50 }
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque `nextCursor` from the previous page.
+          schema: { type: string }
+      responses:
+        '200':
+          description: A page of files.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FilePageResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /v1/files/counts:
+    get:
+      tags: [Search]
+      operationId: countFiles
+      summary: Count files per type group
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - name: namespace
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/NamespaceName' }
+      responses:
+        '200':
+          description: Counts per group.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileCountsResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /v1/files/duplicates:
+    post:
+      tags: [Search]
+      operationId: findDuplicateFiles
+      summary: Find files the folder already holds
+      description: |
+        For each file about to be uploaded, whether the folder already holds a file with the same name
+        and size. Used to ask before storing the same photo or video twice. At most 500 files.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DuplicateCheck' }
+      responses:
+        '200':
+          description: The files that are already there.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DuplicateMatchesResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   # ------------------------------------------------------------------ progress
   /v1/objects/{id}/progress:
     get:
@@ -3049,6 +3133,71 @@ components:
         nextCursor:
           type: [string, 'null']
           description: Pass as `cursor` for the next page; null on the last page.
+    FileGroup:
+      type: string
+      enum: [pictures, videos, documents, other]
+    FileGroupFilter:
+      type: string
+      enum: [all, pictures, videos, documents, other]
+    FileItem:
+      type: object
+      required: [objectId, versionId, namespace, filename, size, status, group, createdAt, updatedAt]
+      properties:
+        objectId: { type: string, format: uuid }
+        versionId: { type: string, format: uuid }
+        namespace: { $ref: '#/components/schemas/NamespaceName' }
+        externalRef: { type: [string, 'null'] }
+        filename: { type: string }
+        contentType: { type: [string, 'null'] }
+        size: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/VersionStatus' }
+        sha256: { type: [string, 'null'] }
+        group: { $ref: '#/components/schemas/FileGroup' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    FilePage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/FileItem' } }
+        nextCursor:
+          type: [string, 'null']
+          description: Pass as `cursor` for the next page; null on the last page.
+    FileCounts:
+      type: object
+      required: [all, pictures, videos, documents, other]
+      properties:
+        all: { type: integer, format: int64 }
+        pictures: { type: integer, format: int64 }
+        videos: { type: integer, format: int64 }
+        documents: { type: integer, format: int64 }
+        other: { type: integer, format: int64 }
+    DuplicateCandidate:
+      type: object
+      required: [filename, size]
+      properties:
+        filename: { type: string }
+        size: { type: integer, format: int64, minimum: 0 }
+    DuplicateCheck:
+      type: object
+      required: [namespace, files]
+      properties:
+        namespace: { $ref: '#/components/schemas/NamespaceName' }
+        files: { type: array, maxItems: 500, items: { $ref: '#/components/schemas/DuplicateCandidate' } }
+    DuplicateFile:
+      type: object
+      required: [filename, size, objectId, namespace, createdAt]
+      properties:
+        filename: { type: string }
+        size: { type: integer, format: int64 }
+        objectId: { type: string, format: uuid }
+        namespace: { $ref: '#/components/schemas/NamespaceName' }
+        createdAt: { type: string, format: date-time }
+    DuplicateMatches:
+      type: object
+      required: [duplicates]
+      properties:
+        duplicates: { type: array, items: { $ref: '#/components/schemas/DuplicateFile' } }
     Progress:
       type: object
       required: [objectId, versionId, status, phase, percent, bytesDone, bytesTotal, terminal]
@@ -3509,6 +3658,12 @@ components:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/Tags' } } }]
     SearchResponse:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/SearchResults' } } }]
+    FilePageResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/FilePage' } } }]
+    FileCountsResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/FileCounts' } } }]
+    DuplicateMatchesResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/DuplicateMatches' } } }]
     ProgressResponse:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/Progress' } } }]
     LifecycleRuleResponse:

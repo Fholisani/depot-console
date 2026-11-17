@@ -8,6 +8,8 @@ export interface ConfirmOptions {
   confirmText: string;
   /** Shows the confirming button in red for actions that remove things. */
   destructive?: boolean;
+  /** Text of the declining button; "Cancel" by default. */
+  cancelText?: string;
 }
 
 /** In-app confirmation dialog (Ionic alert) instead of the browser's window.confirm. */
@@ -20,7 +22,7 @@ export class ConfirmService {
       header: options.header,
       message: options.message,
       buttons: [
-        { text: 'Cancel', role: 'cancel' },
+        { text: options.cancelText ?? 'Cancel', role: 'cancel' },
         {
           text: options.confirmText,
           role: 'confirm',

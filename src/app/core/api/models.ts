@@ -35,6 +35,15 @@ export type CopyResult = Schemas['CopyResult'];
 export type Tags = Schemas['Tags'];
 export type SearchHit = Schemas['SearchHit'];
 export type SearchResults = Schemas['SearchResults'];
+export type FileItem = Schemas['FileItem'];
+export type FilePage = Schemas['FilePage'];
+export type FileCounts = Schemas['FileCounts'];
+export type FileGroup = Schemas['FileGroup'];
+export type FileGroupFilter = Schemas['FileGroupFilter'];
+export type DuplicateFile = Schemas['DuplicateFile'];
+export type DuplicateMatches = Schemas['DuplicateMatches'];
+/** What a file list shows, from search or from the database list. */
+export type ListedFile = SearchHit | FileItem;
 export type Progress = Schemas['Progress'];
 export type ViewInfo = Schemas['ViewInfo'];
 export type Share = Schemas['Share'];

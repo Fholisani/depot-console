@@ -1031,6 +1031,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List files
+         * @description Files newest first, answered from the database (not search), so new uploads show at once and the
+         *     list works while search is unavailable. Optionally one folder and one type group. Page with
+         *     `nextCursor`.
+         */
+        get: operations["listFiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/files/counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Count files per type group */
+        get: operations["countFiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/files/duplicates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Find files the folder already holds
+         * @description For each file about to be uploaded, whether the folder already holds a file with the same name
+         *     and size. Used to ask before storing the same photo or video twice. At most 500 files.
+         */
+        post: operations["findDuplicateFiles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/objects/{id}/progress": {
         parameters: {
             query?: never;
@@ -1989,6 +2049,68 @@ export interface components {
             /** @description Pass as `cursor` for the next page; null on the last page. */
             nextCursor?: string | null;
         };
+        /** @enum {string} */
+        FileGroup: "pictures" | "videos" | "documents" | "other";
+        /** @enum {string} */
+        FileGroupFilter: "all" | "pictures" | "videos" | "documents" | "other";
+        FileItem: {
+            /** Format: uuid */
+            objectId: string;
+            /** Format: uuid */
+            versionId: string;
+            namespace: components["schemas"]["NamespaceName"];
+            externalRef?: string | null;
+            filename: string;
+            contentType?: string | null;
+            /** Format: int64 */
+            size: number;
+            status: components["schemas"]["VersionStatus"];
+            sha256?: string | null;
+            group: components["schemas"]["FileGroup"];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        FilePage: {
+            items: components["schemas"]["FileItem"][];
+            /** @description Pass as `cursor` for the next page; null on the last page. */
+            nextCursor?: string | null;
+        };
+        FileCounts: {
+            /** Format: int64 */
+            all: number;
+            /** Format: int64 */
+            pictures: number;
+            /** Format: int64 */
+            videos: number;
+            /** Format: int64 */
+            documents: number;
+            /** Format: int64 */
+            other: number;
+        };
+        DuplicateCandidate: {
+            filename: string;
+            /** Format: int64 */
+            size: number;
+        };
+        DuplicateCheck: {
+            namespace: components["schemas"]["NamespaceName"];
+            files: components["schemas"]["DuplicateCandidate"][];
+        };
+        DuplicateFile: {
+            filename: string;
+            /** Format: int64 */
+            size: number;
+            /** Format: uuid */
+            objectId: string;
+            namespace: components["schemas"]["NamespaceName"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        DuplicateMatches: {
+            duplicates: components["schemas"]["DuplicateFile"][];
+        };
         Progress: {
             /** Format: uuid */
             objectId: string;
@@ -2544,6 +2666,15 @@ export interface components {
         };
         SearchResponse: components["schemas"]["Envelope"] & {
             data?: components["schemas"]["SearchResults"];
+        };
+        FilePageResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["FilePage"];
+        };
+        FileCountsResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["FileCounts"];
+        };
+        DuplicateMatchesResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["DuplicateMatches"];
         };
         ProgressResponse: components["schemas"]["Envelope"] & {
             data?: components["schemas"]["Progress"];
@@ -4773,6 +4904,98 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listFiles: {
+        parameters: {
+            query?: {
+                namespace?: components["schemas"]["NamespaceName"];
+                group?: components["schemas"]["FileGroupFilter"];
+                size?: number;
+                /** @description Opaque `nextCursor` from the previous page. */
+                cursor?: string;
+            };
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of files. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FilePageResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    countFiles: {
+        parameters: {
+            query?: {
+                namespace?: components["schemas"]["NamespaceName"];
+            };
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counts per group. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileCountsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    findDuplicateFiles: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DuplicateCheck"];
+            };
+        };
+        responses: {
+            /** @description The files that are already there. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuplicateMatchesResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     getProgress: {

@@ -11,7 +11,11 @@ import { ApiError } from '../../core/api/api-error';
 import { FileTile, type TileMark } from './file-tile';
 import { RowThumb } from './row-thumb';
 import { DepotApi } from '../../core/api/depot-api.service';
-import type { Album, AlbumRef, Namespace, ObjectResult, SearchHit } from '../../core/api/models';
+import type { Observable } from 'rxjs';
+import type {
+  Album, AlbumRef, FileCounts, FileGroupFilter, ListedFile, Namespace, ObjectResult,
+} from '../../core/api/models';
+import { DuplicateGuard } from '../../core/upload/duplicate-guard.service';
 import { AlbumDialogs } from '../../core/ui/album-dialogs.service';
 import { kindOf } from '../../core/ui/media';
 import { MediaViewer, type ViewerItem } from '../../core/ui/media-viewer';
@@ -72,6 +76,18 @@ interface UploadJob {
         (ionInput)="setQuery($event.detail.value ?? '')" />
     </div>
 
+    @if (!searching()) {
+      <div class="groups" role="tablist" aria-label="File types">
+        @for (g of groups; track g.key) {
+          @if (g.key === 'all' || g.key === group() || countFor(g.key) > 0) {
+            <ion-button size="small" role="tab" [attr.aria-selected]="group() === g.key"
+              [fill]="group() === g.key ? 'solid' : 'outline'" (click)="setGroup(g.key)">
+              {{ g.label }}@if (counts()) { &nbsp;({{ countFor(g.key) }}) }
+            </ion-button>
+          }
+        }
+      </div>
+    }
     @if (message()) { <ion-text color="success"><p role="status">{{ message() }}</p></ion-text> }
     @if (session.canWrite() && !addTo()) {
       <div class="upload">
@@ -126,7 +142,7 @@ interface UploadJob {
     } @else if (loading() && hits().length === 0) {
       <ion-spinner name="crescent" aria-label="Loading files" />
     } @else if (hits().length === 0) {
-      <p>No files found. New uploads can take a few seconds to appear in search.</p>
+      <p>{{ emptyText() }}</p>
     } @else {
       <div class="view-switch">
         @if (session.canWrite()) {
@@ -208,6 +224,8 @@ interface UploadJob {
     .toolbar { display: grid; grid-template-columns: minmax(10rem, 16rem) 1fr; gap: 0.75rem; align-items: center; }
     .upload { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 0.5rem 0; }
     .job { display: grid; gap: 0.25rem; margin: 0.5rem 0; }
+    .groups { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.5rem 0; }
+    .groups ion-button { margin: 0; --border-radius: 999px; text-transform: none; }
     .status { font-size: 0.85rem; }
     .controls { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
     .view-switch { display: flex; align-items: center; }
@@ -254,7 +272,19 @@ export class FilesPage implements OnInit {
 
   protected readonly namespaces = signal<Namespace[]>([]);
   protected readonly namespace = signal('');
-  protected readonly hits = signal<SearchHit[]>([]);
+  protected readonly hits = signal<ListedFile[]>([]);
+  /** Type tab: all, pictures, videos, documents, other. */
+  protected readonly group = signal<FileGroupFilter>('all');
+  protected readonly counts = signal<FileCounts | null>(null);
+  protected readonly searching = signal(false);
+  private readonly duplicates = inject(DuplicateGuard);
+  protected readonly groups: { key: FileGroupFilter; label: string }[] = [
+    { key: 'all', label: 'All' },
+    { key: 'pictures', label: 'Pictures' },
+    { key: 'videos', label: 'Videos' },
+    { key: 'documents', label: 'Documents' },
+    { key: 'other', label: 'Other' },
+  ];
   protected readonly nextCursor = signal<string | null>(null);
   protected readonly loading = signal(false);
   protected readonly problem = signal<string | null>(null);
@@ -332,7 +362,7 @@ export class FilesPage implements OnInit {
     }
   }
 
-  protected onActivate(hit: SearchHit, index: number): void {
+  protected onActivate(hit: ListedFile, index: number): void {
     if (this.selecting()) {
       this.toggle(hit.objectId);
       return;
@@ -505,19 +535,52 @@ export class FilesPage implements OnInit {
   protected setQuery(value: string): void {
     if (value !== this.query) {
       this.query = value;
+      this.searching.set(value.trim() !== '');
       this.load(true);
     }
+  }
+  protected setGroup(value: FileGroupFilter): void {
+    if (value !== this.group()) {
+      this.group.set(value);
+      this.load(true);
+    }
+  }
+  protected countFor(g: FileGroupFilter): number {
+    const c = this.counts();
+    return c ? c[g] : 0;
+  }
+  protected emptyText(): string {
+    if (this.searching()) {
+      return 'No files match your search.';
+    }
+    const where = this.namespace() ? ` in ${this.namespace()}` : '';
+    const label: Record<FileGroupFilter, string> = {
+      all: 'files', pictures: 'pictures', videos: 'videos', documents: 'documents', other: 'other files',
+    };
+    return `No ${label[this.group()]}${where} yet.`;
+  }
+  /** Counts for the type tabs; a failure only hides the numbers. */
+  private loadCounts(): void {
+    this.api.fileCounts(this.namespace() || undefined).subscribe({
+      next: (c) => this.counts.set(c),
+      error: () => this.counts.set(null),
+    });
   }
 
   load(reset: boolean, attempt = 1): void {
     this.loading.set(true);
     this.problem.set(null);
-    this.api.search({
-      q: this.query || undefined,
-      namespace: this.namespace() || undefined,
-      size: 25,
-      cursor: reset ? undefined : (this.nextCursor() ?? undefined),
-    }).subscribe({
+    const cursor = reset ? undefined : (this.nextCursor() ?? undefined);
+    const namespace = this.namespace() || undefined;
+    // Browsing lists from the database (fast, complete, works while search is down); only typed text
+    // goes to search.
+    if (reset && !this.searching()) {
+      this.loadCounts();
+    }
+    const page: Observable<{ items: ListedFile[]; nextCursor?: string | null }> = this.searching()
+      ? this.api.search({ q: this.query, namespace, size: 25, cursor })
+      : this.api.files({ namespace, group: this.group(), size: 50, cursor });
+    page.subscribe({
       next: (r) => {
         const hidden = hiddenObjects();
         const items = r.items.filter((h) => !hidden.has(h.objectId));
@@ -545,9 +608,16 @@ export class FilesPage implements OnInit {
   }
 
   protected async onPick(input: HTMLInputElement): Promise<void> {
-    const files = Array.from(input.files ?? []);
+    const picked = Array.from(input.files ?? []);
     input.value = '';
     const target = this.uploadTarget();
+    const { upload: files, skipped } = await this.duplicates.check(target, picked);
+    if (skipped.length > 0) {
+      this.message.set(`Skipped ${skipped.length} already in ${target}.`);
+    }
+    if (files.length === 0) {
+      return;
+    }
     const jobs = files.map((file): UploadJob => ({ id: crypto.randomUUID(), name: file.name, file, target, percent: 0 }));
     this.jobs.update((j) => [...jobs, ...j]);
     // Side by side, so pausing one does not hold up the others.

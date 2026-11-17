@@ -4,7 +4,7 @@ import { RouterLink } from '@angular/router';
 import { IonButton, IonItem, IonLabel, IonList, IonNote, IonProgressBar, IonSpinner, IonText } from '@ionic/angular';
 import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
-import type { SearchHit, UsageReport } from '../../core/api/models';
+import type { ListedFile, UsageReport } from '../../core/api/models';
 import { SessionService } from '../../core/tenant/session.service';
 import { describeError, formatBytes } from '../../core/ui/format';
 
@@ -140,7 +140,7 @@ export class DashboardPage implements OnInit {
 
   protected readonly usage = signal<UsageReport | null>(null);
   protected readonly usageProblem = signal<string | null>(null);
-  protected readonly recent = signal<SearchHit[] | null>(null);
+  protected readonly recent = signal<ListedFile[] | null>(null);
   protected readonly bytes = formatBytes;
   protected readonly ringRadius = RING_RADIUS;
   protected readonly ringLength = RING_LENGTH;
@@ -186,7 +186,8 @@ export class DashboardPage implements OnInit {
       next: (u) => this.usage.set(u),
       error: (e: ApiError) => this.usageProblem.set(describeError(e)),
     });
-    this.api.search({ size: 5 }).subscribe({
+    // From the database list, so recent files show even while search is unavailable.
+    this.api.files({ size: 5 }).subscribe({
       next: (r) => this.recent.set(r.items),
       error: () => this.recent.set([]),
     });
