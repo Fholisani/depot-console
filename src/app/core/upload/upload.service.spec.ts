@@ -282,11 +282,17 @@ describe('UploadTask survives a dropped connection and a page reload', () => {
   });
 
   const live = (): FakeXhr[] => FakeXhr.all.filter((x) => !x.aborted && x.status === 0 && x.onerror);
-  /** Moves time on until the condition holds (hashing 16 MiB parts takes real time). */
+  /**
+   * Moves fake time on and yields real time until the condition holds. Bounded by real time, not by a
+   * number of rounds: hashing a 16 MiB part takes real time, much more on a slow CI agent (build 20 gave
+   * up after 600 quick rounds, under a second, before a part was hashed).
+   */
   const until = async (what: string, cond: () => boolean): Promise<void> => {
-    for (let i = 0; i < 600 && !cond(); i++) {
+    const deadline = Date.now() + 45_000;
+    while (!cond() && Date.now() < deadline) {
       await vi.advanceTimersByTimeAsync(500);
       await realTick();
+      await new Promise<void>((r) => queueMicrotask(r));
     }
     expect(cond(), what).toBe(true);
   };
@@ -319,7 +325,7 @@ describe('UploadTask survives a dropped connection and a page reload', () => {
     await expect(result).resolves.toMatchObject({ objectId: 'o1' });
     expect(FakeXhr.all.slice(before).map((x) => x.url)).not.toContain('part-1');
     expect(created).toBe(1);
-  });
+  }, 60_000);
 
   it('continues the same session when the same file is chosen again after the page reloaded', async () => {
     // What a reload leaves behind: the session remembered for this file, and parts 1-2 in storage.
@@ -339,7 +345,7 @@ describe('UploadTask survives a dropped connection and a page reload', () => {
     expect(statusCalls).toContain('u1');
     expect(FakeXhr.all.map((x) => x.url).sort()).toEqual(['part-3', 'part-4', 'part-5']);
     expect(localStorage.length).toBe(0);                      // forgotten once complete
-  });
+  }, 60_000);
 
   it('still releases the session on a real error', async () => {
     failNextTarget = new ApiError(409, 'PART_CHECKSUM_MISMATCH', 'Part does not match');
@@ -351,7 +357,7 @@ describe('UploadTask survives a dropped connection and a page reload', () => {
     await expect(result).rejects.toMatchObject({ reason: 'PART_CHECKSUM_MISMATCH' });
     expect(aborted).toBe(1);
     expect(localStorage.length).toBe(0);
-  });
+  }, 60_000);
 
   it('sends phone-sized videos in resumable parts', () => {
     const video = new File([new ArrayBuffer(20 * MIB)], 'clip.mov');
