@@ -1535,10 +1535,51 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Events that could not be published */
+        /**
+         * Dead letters from every source
+         * @description Events that could not be published (relay) or processed (indexer, ...), recorded from the
+         *     dead-letter topic in one format: source, reason, attempts and the original event. Newest first.
+         */
         get: operations["operatorDeadLetters"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/operator/dead-letters/{id}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a dead letter's event again
+         * @description Writes the original event to the outbox again (new event id, same type, subject and data).
+         */
+        post: operations["operatorReplayDeadLetter"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/operator/dead-letters/{id}/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a dead letter as dealt with */
+        post: operations["operatorDiscardDeadLetter"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2346,10 +2387,44 @@ export interface components {
         DeadLetter: {
             /** Format: uuid */
             id: string;
-            eventType: string;
-            error: string;
+            /** @description Who failed: relay, indexer, poster, unknown. */
+            source: string;
+            reason: string;
+            /** Format: int32 */
+            attempts: number;
+            /** Format: uuid */
+            eventId?: string | null;
+            /** @example object.uploaded */
+            eventType?: string | null;
+            /** Format: uuid */
+            tenantId?: string | null;
+            subject?: string | null;
+            topic?: string | null;
+            /** @enum {string} */
+            status: "OPEN" | "REPLAYED" | "DISCARDED";
+            replayable: boolean;
             /** Format: date-time */
+            failedAt: string;
+            /** Format: date-time */
+            recordedAt: string;
+            /** Format: date-time */
+            handledAt?: string | null;
+            handledBy?: string | null;
+            /** Format: uuid */
+            replayEventId?: string | null;
+            /** @description Same as reason (kept for older readers). */
+            error: string;
+            /**
+             * Format: date-time
+             * @description Same as failedAt (kept for older readers).
+             */
             at: string;
+        };
+        DeadLetterReplay: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            replayEventId: string;
         };
         ViewInfo: {
             /** Format: uuid */
@@ -2717,6 +2792,9 @@ export interface components {
         };
         ReconcileResponse: components["schemas"]["Envelope"] & {
             data?: components["schemas"]["UsageDrift"][];
+        };
+        DeadLetterReplayResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["DeadLetterReplay"];
         };
         DeadLetterResponse: components["schemas"]["Envelope"] & {
             data?: components["schemas"]["DeadLetter"][];
@@ -5724,6 +5802,8 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                status?: "OPEN" | "REPLAYED" | "DISCARDED";
+                source?: string;
             };
             header?: never;
             path?: never;
@@ -5741,8 +5821,61 @@ export interface operations {
                     "application/json": components["schemas"]["DeadLetterResponse"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    operatorReplayDeadLetter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Replayed. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeadLetterReplayResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            412: components["responses"]["PreconditionFailed"];
+        };
+    };
+    operatorDiscardDeadLetter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Discarded. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            412: components["responses"]["PreconditionFailed"];
         };
     };
 }

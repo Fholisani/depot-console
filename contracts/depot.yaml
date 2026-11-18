@@ -2224,7 +2224,10 @@ paths:
     get:
       tags: [Operator]
       operationId: operatorDeadLetters
-      summary: Events that could not be published
+      summary: Dead letters from every source
+      description: |
+        Events that could not be published (relay) or processed (indexer, ...), recorded from the
+        dead-letter topic in one format: source, reason, attempts and the original event. Newest first.
       security:
         - bearer: []
       parameters:
@@ -2232,6 +2235,14 @@ paths:
           in: query
           required: false
           schema: { type: integer, format: int32, minimum: 1, maximum: 1000, default: 100 }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [OPEN, REPLAYED, DISCARDED] }
+        - name: source
+          in: query
+          required: false
+          schema: { type: string, examples: [relay, indexer] }
       responses:
         '200':
           description: Newest first.
@@ -2239,8 +2250,52 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DeadLetterResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /v1/operator/dead-letters/{id}/replay:
+    post:
+      tags: [Operator]
+      operationId: operatorReplayDeadLetter
+      summary: Send a dead letter's event again
+      description: Writes the original event to the outbox again (new event id, same type, subject and data).
+      security:
+        - bearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Replayed.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeadLetterReplayResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+  /v1/operator/dead-letters/{id}/discard:
+    post:
+      tags: [Operator]
+      operationId: operatorDiscardDeadLetter
+      summary: Mark a dead letter as dealt with
+      security:
+        - bearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Discarded. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
 
 # =====================================================================================================
 components:
@@ -3421,12 +3476,32 @@ components:
         actual: { type: integer, format: int64 }
     DeadLetter:
       type: object
-      required: [id, eventType, error, at]
+      required: [id, source, reason, attempts, status, replayable, failedAt, recordedAt, error, at]
       properties:
         id: { type: string, format: uuid }
-        eventType: { type: string }
-        error: { type: string }
-        at: { type: string, format: date-time }
+        source: { type: string, description: 'Who failed: relay, indexer, poster, unknown.' }
+        reason: { type: string }
+        attempts: { type: integer, format: int32 }
+        eventId: { type: [string, 'null'], format: uuid }
+        eventType: { type: [string, 'null'], examples: [object.uploaded] }
+        tenantId: { type: [string, 'null'], format: uuid }
+        subject: { type: [string, 'null'] }
+        topic: { type: [string, 'null'] }
+        status: { type: string, enum: [OPEN, REPLAYED, DISCARDED] }
+        replayable: { type: boolean }
+        failedAt: { type: string, format: date-time }
+        recordedAt: { type: string, format: date-time }
+        handledAt: { type: [string, 'null'], format: date-time }
+        handledBy: { type: [string, 'null'] }
+        replayEventId: { type: [string, 'null'], format: uuid }
+        error: { type: string, description: Same as reason (kept for older readers). }
+        at: { type: string, format: date-time, description: Same as failedAt (kept for older readers). }
+    DeadLetterReplay:
+      type: object
+      required: [id, replayEventId]
+      properties:
+        id: { type: string, format: uuid }
+        replayEventId: { type: string, format: uuid }
 
     ViewInfo:
       type: object
@@ -3693,5 +3768,7 @@ components:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/IntegrityIssue' } } } }]
     ReconcileResponse:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/UsageDrift' } } } }]
+    DeadLetterReplayResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/DeadLetterReplay' } } }]
     DeadLetterResponse:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/DeadLetter' } } } }]
