@@ -8,6 +8,7 @@ import { firstValueFrom } from 'rxjs';
 import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
 import type { SignupResult } from '../../core/api/models';
+import { SignInService } from '../../core/auth/sign-in.service';
 
 /** Words the API refuses as tenant addresses (contract: `SignupRequest.slug`). */
 const RESERVED = new Set([
@@ -112,6 +113,7 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
   `],
 })
 export class SignupPage {
+  private readonly signInFlow = inject(SignInService);
   private readonly api = inject(DepotApi);
   private readonly oidc = inject(OidcSecurityService);
 
@@ -190,6 +192,6 @@ export class SignupPage {
   }
 
   signIn(): void {
-    this.oidc.authorize();
+    this.signInFlow.start();
   }
 }

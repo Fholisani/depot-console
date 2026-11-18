@@ -1,6 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { OidcSecurityService } from 'angular-auth-oidc-client';
 import { Observable, catchError, finalize, map, of, shareReplay, switchMap, take } from 'rxjs';
+import { SignInService } from './sign-in.service';
 
 /** Renew when the access token has less than this left, so it cannot expire on the way. */
 export const RENEW_MARGIN_SECONDS = 30;
@@ -15,6 +16,7 @@ export const RENEW_MARGIN_SECONDS = 30;
 @Injectable({ providedIn: 'root' })
 export class FreshTokenService {
   private readonly oidc = inject(OidcSecurityService);
+  private readonly signIn = inject(SignInService);
   private renewing: Observable<string | null> | null = null;
   private signingIn = false;
 
@@ -62,7 +64,7 @@ export class FreshTokenService {
       return;
     }
     this.signingIn = true;
-    this.oidc.authorize();
+    this.signIn.start();
   }
 
   private secondsLeft(): Observable<number> {

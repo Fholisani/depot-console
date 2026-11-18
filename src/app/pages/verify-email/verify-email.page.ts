@@ -1,6 +1,7 @@
 import { Component, inject } from '@angular/core';
 import { IonButton } from '@ionic/angular';
 import { OidcSecurityService } from 'angular-auth-oidc-client';
+import { SignInService } from '../../core/auth/sign-in.service';
 
 /**
  * Where Keycloak sends the user after they open the verification link (the API's
@@ -29,9 +30,10 @@ import { OidcSecurityService } from 'angular-auth-oidc-client';
   `],
 })
 export class VerifyEmailPage {
+  private readonly signInFlow = inject(SignInService);
   private readonly oidc = inject(OidcSecurityService);
 
   signIn(): void {
-    this.oidc.authorize();
+    this.signInFlow.start();
   }
 }

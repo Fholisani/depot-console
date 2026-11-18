@@ -5,6 +5,7 @@ import { IonButton, IonContent, IonHeader, IonToolbar } from '@ionic/angular';
 import { OidcSecurityService } from 'angular-auth-oidc-client';
 import { map } from 'rxjs';
 import { APP_CONFIG } from '../../core/config/app-config';
+import { SignInService } from '../../core/auth/sign-in.service';
 
 /** Frame for the pages anyone can see: product, pricing, docs, sign-up. */
 @Component({
@@ -58,12 +59,13 @@ import { APP_CONFIG } from '../../core/config/app-config';
   `],
 })
 export class PublicLayout {
+  private readonly signInFlow = inject(SignInService);
   private readonly oidc = inject(OidcSecurityService);
   protected readonly apiBase = inject(APP_CONFIG).apiBase.replace(/\/$/, '');
   protected readonly signedIn = toSignal(
     this.oidc.isAuthenticated$.pipe(map((r) => r.isAuthenticated)), { initialValue: false });
 
   signIn(): void {
-    this.oidc.authorize();
+    this.signInFlow.start();
   }
 }
