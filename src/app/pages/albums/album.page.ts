@@ -76,13 +76,16 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
           <ion-button size="small" fill="clear" color="danger" (click)="remove(a)" [disabled]="busy()">Delete album</ion-button>
         </div>
       }
+      @if (uploadSummary(); as sum) {
+        <ion-text [color]="sum.failed > 0 ? 'warning' : 'success'"><p role="status">{{ sum.text }}</p></ion-text>
+      }
       @for (u of uploads(); track u.id) {
         <div class="job">
           <span>{{ u.name }}</span>
           @if (u.error) {
             <ion-text color="danger"><span role="alert">{{ u.error }}</span></ion-text>
           } @else if (u.done) {
-            <ion-note>{{ u.note ?? 'Added to the album' }}</ion-note>
+            <ion-text color="success"><span>✓ {{ u.note ?? 'Uploaded · ' + bytes(u.size) + ' · added to the album' }}</span></ion-text>
           } @else {
             @if (u.phase === 'preparing' || u.phase === 'finishing' || !u.phase) {
               <ion-progress-bar type="indeterminate" [attr.aria-label]="'Uploading ' + u.name" />
@@ -411,6 +414,29 @@ export class AlbumPage implements OnInit {
   /** Running uploads by job id, for pause, resume and cancel. */
   private readonly tasks = new Map<string, UploadTask>();
   private readonly duplicateGuard = inject(DuplicateGuard);
+
+  /** One line after a batch: how many uploaded, how much, and where they are in the album. */
+  protected readonly uploadSummary = computed(() => {
+    const list = this.uploads();
+    if (list.length === 0 || list.some((u) => !u.done && !u.error)) {
+      return null;
+    }
+    const ok = list.filter((u) => u.done && !u.note);
+    const skipped = list.filter((u) => u.done && u.note);
+    const failed = list.filter((u) => u.error && u.error !== 'Cancelled').length;
+    const parts: string[] = [];
+    if (ok.length > 0) {
+      const size = ok.reduce((n, u) => n + u.size, 0);
+      parts.push(`${ok.length} uploaded (${this.bytes(size)}), added at the end of the album`);
+    }
+    if (skipped.length > 0) {
+      parts.push(`${skipped.length} already uploaded, added from the folder`);
+    }
+    if (failed > 0) {
+      parts.push(`${failed} failed`);
+    }
+    return parts.length ? { text: parts.join(' · ') + '.', failed } : null;
+  });
 
   protected status(u: AlbumUpload): string {
     return uploadStatusText(u.phase, u.percent, u.size);

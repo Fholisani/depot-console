@@ -1,7 +1,9 @@
 import { DatePipe } from '@angular/common';
 import { Component, computed, inject, OnInit, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { IonButton, IonItem, IonLabel, IonList, IonNote, IonProgressBar, IonSpinner, IonText } from '@ionic/angular';
+import {
+  IonButton, IonItem, IonLabel, IonList, IonNote, IonProgressBar, IonSpinner, IonText, ViewWillEnter,
+} from '@ionic/angular';
 import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
 import type { ListedFile, UsageReport } from '../../core/api/models';
@@ -134,7 +136,7 @@ const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
     @media (max-width: 34rem) { .space { grid-template-columns: 1fr; justify-items: center; text-align: center; } }
   `],
 })
-export class DashboardPage implements OnInit {
+export class DashboardPage implements OnInit, ViewWillEnter {
   private readonly api = inject(DepotApi);
   protected readonly session = inject(SessionService);
 
@@ -182,8 +184,25 @@ export class DashboardPage implements OnInit {
   });
 
   ngOnInit(): void {
+    this.refresh();
+  }
+
+  /**
+   * Ionic keeps a visited tab alive, so ngOnInit runs only the first time: after uploading, coming back
+   * to the dashboard showed the old space used. Load again every time the dashboard is shown.
+   */
+  ionViewWillEnter(): void {
+    if (this.usage() !== null || this.usageProblem() !== null) {
+      this.refresh();
+    }
+  }
+
+  private refresh(): void {
     this.api.usage().subscribe({
-      next: (u) => this.usage.set(u),
+      next: (u) => {
+        this.usage.set(u);
+        this.usageProblem.set(null);
+      },
       error: (e: ApiError) => this.usageProblem.set(describeError(e)),
     });
     // From the database list, so recent files show even while search is unavailable.
