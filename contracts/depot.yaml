@@ -1086,8 +1086,9 @@ paths:
       summary: A small preview picture
       description: |
         Returns a short-lived URL of a JPEG preview (longest side 480 px), made the first time it is asked
-        for and kept. Only JPEG, PNG, GIF and BMP photos have one; any other file answers 404, so the
-        client should show a generic tile. Previews are small and are not counted as egress.
+        for and kept. JPEG, PNG, GIF and BMP photos have one. A video has one (its poster, a frame about a
+        second in) once the worker has made it after the upload; until then, and for any other file, it
+        answers 404, so the client should show a generic tile. Previews are small and are not counted as egress.
       parameters:
         - $ref: '#/components/parameters/XDepotTenant'
         - $ref: '#/components/parameters/ObjectId'
@@ -2296,6 +2297,46 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '412': { $ref: '#/components/responses/PreconditionFailed' }
+  /v1/operator/media:
+    get:
+      tags: [Operator]
+      operationId: operatorMediaCounts
+      summary: Video poster progress
+      description: How many videos have a poster (done), could not be read (failed) or are waiting.
+      security:
+        - bearer: []
+      responses:
+        '200':
+          description: Counts.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaCounts' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /v1/operator/media/sweep:
+    post:
+      tags: [Operator]
+      operationId: operatorMediaSweep
+      summary: Ask for posters of videos that have none
+      description: |
+        Queues poster requests (at most 1000 per call) for videos without a poster, instead of waiting for
+        the worker's hourly sweep. The worker makes them in the background, several at once.
+      security:
+        - bearer: []
+      responses:
+        '200':
+          description: Counts, plus how many requests were queued.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/MediaCounts' }
+                  - type: object
+                    required: [queued]
+                    properties:
+                      queued: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
 # =====================================================================================================
 components:
@@ -3196,7 +3237,7 @@ components:
       enum: [all, pictures, videos, documents, other]
     FileItem:
       type: object
-      required: [objectId, versionId, namespace, filename, size, status, group, createdAt, updatedAt]
+      required: [objectId, versionId, namespace, filename, size, status, group, createdAt, updatedAt, poster]
       properties:
         objectId: { type: string, format: uuid }
         versionId: { type: string, format: uuid }
@@ -3210,6 +3251,24 @@ components:
         group: { $ref: '#/components/schemas/FileGroup' }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+        durationMs:
+          type: [integer, 'null']
+          format: int64
+          description: A video's length, once its poster has been made; null otherwise.
+        recordedAt:
+          type: [string, 'null']
+          format: date-time
+          description: When a video was recorded (from its metadata), when known; null otherwise.
+        poster:
+          type: boolean
+          description: True when the file is a video whose poster exists (served by /thumbnail).
+    MediaCounts:
+      type: object
+      required: [done, failed, waiting]
+      properties:
+        done: { type: integer, format: int64 }
+        failed: { type: integer, format: int64 }
+        waiting: { type: integer, format: int64 }
     FilePage:
       type: object
       required: [items]
@@ -3569,7 +3628,15 @@ components:
         contentType: { type: string }
         kind: { type: string, enum: [image, video, audio, pdf, other] }
         size: { type: integer, format: int64 }
-        thumbnail: { type: boolean, description: True if /thumbnail and /preview exist for the item. }
+        thumbnail: { type: boolean, description: True if /thumbnail exists for the item (and /preview, for photos). }
+        durationMs:
+          type: [integer, 'null']
+          format: int64
+          description: A video's length, once its poster has been made; null otherwise.
+        recordedAt:
+          type: [string, 'null']
+          format: date-time
+          description: When a video was recorded (from its metadata), when known; null otherwise.
     SharedItemPage:
       type: object
       required: [items]
@@ -3602,9 +3669,17 @@ components:
         kind: { type: string, enum: [image, video, audio, pdf, other] }
         size: { type: integer, format: int64 }
         status: { type: string, description: The current version's status. }
-        thumbnail: { type: boolean, description: True if a thumbnail and a preview can be made. }
+        thumbnail: { type: boolean, description: True if /thumbnail exists (a photo, or a video with a poster). }
         addedAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
+        durationMs:
+          type: [integer, 'null']
+          format: int64
+          description: A video's length, once its poster has been made; null otherwise.
+        recordedAt:
+          type: [string, 'null']
+          format: date-time
+          description: When a video was recorded (from its metadata), when known; null otherwise.
     AlbumItemPage:
       type: object
       required: [items]

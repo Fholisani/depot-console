@@ -13,6 +13,8 @@ class FakeXhr {
   static all: FakeXhr[] = [];
   status = 0;
   aborted = false;
+  /** The connection dropped under it; it is over, like a real request whose onerror fired. */
+  failed = false;
   upload: { onprogress: ((e: { loaded: number }) => void) | null } = { onprogress: null };
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
@@ -40,6 +42,7 @@ class FakeXhr {
   }
   /** The connection dropped (for example the phone screen locked). */
   fail(): void {
+    this.failed = true;
     this.onerror?.();
   }
 }
@@ -55,7 +58,7 @@ const settle = async (): Promise<void> => {
  * Waits until `condition` holds. Parts are hashed with real SHA-256 before they are sent, which
  * takes longer on a busy machine than a fixed number of ticks, so tests wait for the state they need.
  */
-const until = async (condition: () => boolean, what: string, timeoutMs = 10_000): Promise<void> => {
+const until = async (condition: () => boolean, what: string, timeoutMs = 30_000): Promise<void> => {
   const end = Date.now() + timeoutMs;
   while (!condition()) {
     if (Date.now() > end) {
@@ -138,7 +141,7 @@ describe('UploadTask pause and resume', () => {
     finishPart(5);
     await expect(result).resolves.toMatchObject({ objectId: 'o1' });
     expect(completed!.parts.map((p) => p.partNumber)).toEqual([1, 2, 3, 4, 5]);
-  });
+  }, 60_000);
 
   it('pausing when nothing is in flight reports paused straight away', async () => {
     const file = new File([new ArrayBuffer(70 * MIB)], 'big.lrf');
@@ -152,7 +155,7 @@ describe('UploadTask pause and resume', () => {
     await until(() => phases.at(-1)?.phase === 'paused', 'paused');
     expect(phases.at(-1)?.phase).toBe('paused');
     task.cancel();
-  });
+  }, 60_000);
 
   it('cancel still aborts the parts on the wire', async () => {
     const file = new File([new ArrayBuffer(70 * MIB)], 'big.lrf');
@@ -162,7 +165,7 @@ describe('UploadTask pause and resume', () => {
     task.cancel();
     await expect(result).rejects.toThrow('Upload cancelled');
     expect(FakeXhr.all.every((x) => x.aborted)).toBe(true);
-  });
+  }, 60_000);
 });
 
 /** Yields one real event-loop turn (not affected by fake timers), so real async work can finish. */
@@ -285,7 +288,9 @@ describe('UploadTask survives a dropped connection and a page reload', () => {
     vi.useRealTimers();
   });
 
-  const live = (): FakeXhr[] => FakeXhr.all.filter((x) => !x.aborted && x.status === 0 && x.onerror);
+  // Failed requests are over: otherwise `finish` could pick a part's old failed request instead of the
+  // one resent after reconnecting, and the new one hung until the 60 s stall watchdog (console build 25).
+  const live = (): FakeXhr[] => FakeXhr.all.filter((x) => !x.aborted && !x.failed && x.status === 0 && x.onerror);
   /**
    * Moves fake time on and yields real time until the condition holds. Bounded by real time, not by a
    * number of rounds: hashing a 16 MiB part takes real time, much more on a slow CI agent (build 20 gave

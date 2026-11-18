@@ -718,8 +718,9 @@ export interface paths {
         /**
          * A small preview picture
          * @description Returns a short-lived URL of a JPEG preview (longest side 480 px), made the first time it is asked
-         *     for and kept. Only JPEG, PNG, GIF and BMP photos have one; any other file answers 404, so the
-         *     client should show a generic tile. Previews are small and are not counted as egress.
+         *     for and kept. JPEG, PNG, GIF and BMP photos have one. A video has one (its poster, a frame about a
+         *     second in) once the worker has made it after the upload; until then, and for any other file, it
+         *     answers 404, so the client should show a generic tile. Previews are small and are not counted as egress.
          */
         get: operations["getThumbnail"];
         put?: never;
@@ -1586,6 +1587,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/operator/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Video poster progress
+         * @description How many videos have a poster (done), could not be read (failed) or are waiting.
+         */
+        get: operations["operatorMediaCounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/operator/media/sweep": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for posters of videos that have none
+         * @description Queues poster requests (at most 1000 per call) for videos without a poster, instead of waiting for
+         *     the worker's hourly sweep. The worker makes them in the background, several at once.
+         */
+        post: operations["operatorMediaSweep"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2112,6 +2154,26 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+            /**
+             * Format: int64
+             * @description A video's length, once its poster has been made; null otherwise.
+             */
+            durationMs?: number | null;
+            /**
+             * Format: date-time
+             * @description When a video was recorded (from its metadata), when known; null otherwise.
+             */
+            recordedAt?: string | null;
+            /** @description True when the file is a video whose poster exists (served by /thumbnail). */
+            poster: boolean;
+        };
+        MediaCounts: {
+            /** Format: int64 */
+            done: number;
+            /** Format: int64 */
+            failed: number;
+            /** Format: int64 */
+            waiting: number;
         };
         FilePage: {
             items: components["schemas"]["FileItem"][];
@@ -2545,8 +2607,18 @@ export interface components {
             kind: "image" | "video" | "audio" | "pdf" | "other";
             /** Format: int64 */
             size: number;
-            /** @description True if /thumbnail and /preview exist for the item. */
+            /** @description True if /thumbnail exists for the item (and /preview */
             thumbnail: boolean;
+            /**
+             * Format: int64
+             * @description A video's length, once its poster has been made; null otherwise.
+             */
+            durationMs?: number | null;
+            /**
+             * Format: date-time
+             * @description When a video was recorded (from its metadata), when known; null otherwise.
+             */
+            recordedAt?: string | null;
         };
         SharedItemPage: {
             items: components["schemas"]["SharedItem"][];
@@ -2588,12 +2660,22 @@ export interface components {
             size: number;
             /** @description The current version's status. */
             status: string;
-            /** @description True if a thumbnail and a preview can be made. */
+            /** @description True if /thumbnail exists (a photo */
             thumbnail: boolean;
             /** Format: date-time */
             addedAt: string;
             /** Format: date-time */
             createdAt: string;
+            /**
+             * Format: int64
+             * @description A video's length, once its poster has been made; null otherwise.
+             */
+            durationMs?: number | null;
+            /**
+             * Format: date-time
+             * @description When a video was recorded (from its metadata), when known; null otherwise.
+             */
+            recordedAt?: string | null;
         };
         AlbumItemPage: {
             items: components["schemas"]["AlbumItem"][];
@@ -5876,6 +5958,52 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             412: components["responses"]["PreconditionFailed"];
+        };
+    };
+    operatorMediaCounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaCounts"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    operatorMediaSweep: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counts, plus how many requests were queued. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaCounts"] & {
+                        queued: number;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
 }

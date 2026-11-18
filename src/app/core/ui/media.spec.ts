@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { hasPicture, kindOf, linkStats, timeAgo } from './media';
+import {
+  formatDuration, formatRecorded, hasPicture, hasThumbnail, isNumericName, kindOf, linkStats, timeAgo,
+} from './media';
 
 describe('media helpers', () => {
   it('reads the kind from the type, or from the extension when the type is generic', () => {
@@ -34,5 +36,31 @@ describe('media helpers', () => {
       .toBe('12 views · 4 downloads · last opened 2 hours ago');
     expect(linkStats({ views: 1, downloads: 1, lastViewedAt: null }, now))
       .toBe('1 view · 1 download · not opened yet');
+  });
+
+  it('asks for a video picture only once its poster exists', () => {
+    expect(hasThumbnail({ filename: 'IMG_0629.mov', contentType: 'video/quicktime' })).toBe(false);
+    expect(hasThumbnail({ filename: 'IMG_0629.mov', contentType: 'video/quicktime', poster: false })).toBe(false);
+    expect(hasThumbnail({ filename: 'IMG_0629.mov', contentType: 'video/quicktime', poster: true })).toBe(true);
+    expect(hasThumbnail({ filename: 'clip.mp4', contentType: null, thumbnail: true })).toBe(true);
+    expect(hasThumbnail({ filename: 'a.jpg', contentType: 'image/jpeg' })).toBe(true);
+  });
+
+  it('formats a video length', () => {
+    expect(formatDuration(42_400)).toBe('0:42');
+    expect(formatDuration(725_000)).toBe('12:05');
+    expect(formatDuration(3_723_000)).toBe('1:02:03');
+    expect(formatDuration(null)).toBe('');
+    expect(formatDuration(undefined)).toBe('');
+  });
+
+  it('formats a recording date and spots names that are only numbers', () => {
+    expect(formatRecorded('2023-12-24T18:30:05Z')).toContain('2023');
+    expect(formatRecorded(null)).toBe('');
+    expect(formatRecorded('not a date')).toBe('');
+    expect(isNumericName('20231224_203005.mp4')).toBe(true);
+    expect(isNumericName('1703442605.mov')).toBe(true);
+    expect(isNumericName('IMG_0629.mov')).toBe(false);
+    expect(isNumericName('birthday.mp4')).toBe(false);
   });
 });

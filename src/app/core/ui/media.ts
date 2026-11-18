@@ -39,6 +39,53 @@ export function hasPicture(filename: string, contentType?: string | null): boole
   return /^image\/(jpeg|png|gif|bmp)/.test(type) || /\.(jpe?g|png|gif|bmp)$/i.test(filename);
 }
 
+/** What the API says about a file's picture; `poster` (file list) or `thumbnail` (album items). */
+export interface PictureInfo {
+  filename: string;
+  contentType?: string | null;
+  poster?: boolean;
+  thumbnail?: boolean;
+}
+
+/**
+ * Whether to ask the API for a file's 480 px picture: photos it can make, and videos once the
+ * worker has made their poster (the list says so; asking before would only get a 404).
+ */
+export function hasThumbnail(f: PictureInfo): boolean {
+  if (kindOf(f.filename, f.contentType) === 'video') {
+    return f.poster === true || f.thumbnail === true;
+  }
+  return hasPicture(f.filename, f.contentType);
+}
+
+/** A video's length: "0:42", "12:05", "1:02:03". Empty when unknown. */
+export function formatDuration(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) {
+    return '';
+  }
+  const total = Math.round(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
+/** When a video was recorded, as "24 Dec 2023, 20:30" in the viewer's time zone. Empty when unknown. */
+export function formatRecorded(iso: string | null | undefined): string {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (Number.isNaN(t)) {
+    return '';
+  }
+  return new Date(t).toLocaleString(undefined,
+    { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/** True for names that say nothing, like a camera's "20231224_203005.mp4" or "1703442605.mov". */
+export function isNumericName(filename: string): boolean {
+  const stem = filename.replace(/\.[^.]+$/, '');
+  return /^[\d_\- ]+$/.test(stem);
+}
+
 /** A tile icon for files without a picture. */
 export function kindIcon(kind: MediaKind): string {
   switch (kind) {

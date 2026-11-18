@@ -1,6 +1,6 @@
 import { Component, ElementRef, inject, input, OnDestroy, OnInit, signal } from '@angular/core';
 import { DepotApi } from '../../core/api/depot-api.service';
-import { hasPicture, kindIcon, kindOf } from '../../core/ui/media';
+import { hasThumbnail, kindIcon, kindOf } from '../../core/ui/media';
 import { loadThumbnail, whenVisible } from '../../core/ui/thumbnail-loader';
 
 /** A small square picture for a list row: the 480 px thumbnail, never the original. */
@@ -25,6 +25,8 @@ export class RowThumb implements OnInit, OnDestroy {
   readonly objectId = input.required<string>();
   readonly filename = input.required<string>();
   readonly contentType = input<string | null | undefined>(null);
+  /** A video whose poster exists. */
+  readonly poster = input(false);
   protected readonly url = signal<string | null>(null);
   private stopWatching?: () => void;
   private destroyed = false;
@@ -34,7 +36,7 @@ export class RowThumb implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
-    if (!hasPicture(this.filename(), this.contentType())) {
+    if (!hasThumbnail({ filename: this.filename(), contentType: this.contentType(), poster: this.poster() })) {
       return;
     }
     this.stopWatching = whenVisible(this.el.nativeElement, () => {

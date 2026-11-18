@@ -192,7 +192,7 @@ interface UploadJob {
                 [attr.aria-label]="'Select ' + hit.filename" (click)="$event.preventDefault()" />
             }
             <app-row-thumb slot="start" [objectId]="hit.objectId" [filename]="hit.filename"
-              [contentType]="hit.contentType" />
+              [contentType]="hit.contentType" [poster]="hasPoster(hit)" />
             <ion-label>
               <h2>
                 {{ hit.filename }}
@@ -424,6 +424,11 @@ export class FilesPage implements OnInit {
 
   protected clearSelection(): void {
     this.selected.set(new Set());
+  }
+
+  /** Database-listed videos say whether their poster exists; search hits do not, so they keep the icon. */
+  protected hasPoster(f: ListedFile): boolean {
+    return 'poster' in f && f.poster === true;
   }
 
   protected markOf(id: string): TileMark {

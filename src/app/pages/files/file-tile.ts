@@ -1,7 +1,7 @@
 import { Component, ElementRef, inject, input, OnDestroy, OnInit, output, signal } from '@angular/core';
 import { DepotApi } from '../../core/api/depot-api.service';
 import { formatBytes } from '../../core/ui/format';
-import { hasPicture, kindIcon, kindOf } from '../../core/ui/media';
+import { formatDuration, formatRecorded, hasThumbnail, isNumericName, kindIcon, kindOf } from '../../core/ui/media';
 import { loadThumbnail, whenVisible } from '../../core/ui/thumbnail-loader';
 
 /** What a tile needs to know about a file. */
@@ -10,13 +10,20 @@ export interface TileFile {
   filename: string;
   size: number;
   contentType?: string | null;
+  /** A video whose poster exists (file list). */
+  poster?: boolean;
+  /** The API has a picture of it (album and shared items). */
+  thumbnail?: boolean;
+  durationMs?: number | null;
+  recordedAt?: string | null;
 }
 
 /** Album marks on a tile: in an album, or in a shared album. */
 export type TileMark = 'album' | 'shared' | null;
 
 /**
- * One file in a gallery: a preview picture for photos, a simple tile for everything else. Clicking
+ * One file in a gallery: a preview picture for photos and videos with a poster (videos also show their
+ * length), a simple tile for everything else. Clicking
  * opens it (the host shows the viewer) or, in select mode, ticks it. Signed-in pages get the picture
  * from the API; the shared-album page passes a public `pictureUrl` instead.
  */
@@ -32,7 +39,7 @@ export type TileMark = 'album' | 'shared' | null;
           <span class="kind" aria-hidden="true">{{ icon() }}</span>
         }
         @if (kind() === 'video') {
-          <span class="play" aria-hidden="true">▶</span>
+          <span class="play" aria-hidden="true">▶{{ duration() ? ' ' + duration() : '' }}</span>
         }
         @if (selecting()) {
           <span class="check" aria-hidden="true">{{ selected() ? '✓' : '' }}</span>
@@ -44,8 +51,8 @@ export type TileMark = 'album' | 'shared' | null;
         }
       </div>
       <div class="cap">
-        <span class="name">{{ file().filename }}</span>
-        <span class="size">{{ bytes(file().size) }}</span>
+        <span class="name" [attr.title]="file().filename">{{ name() }}</span>
+        <span class="size">{{ details() }}</span>
       </div>
     </button>
   `,
@@ -99,6 +106,24 @@ export class FileTile implements OnInit, OnDestroy {
     return kindIcon(this.kind());
   }
 
+  protected duration(): string {
+    return formatDuration(this.file().durationMs);
+  }
+
+  /** The recording date instead of a name that is only digits (camera and phone video names). */
+  protected name(): string {
+    const f = this.file();
+    const recorded = formatRecorded(f.recordedAt);
+    return recorded && isNumericName(f.filename) ? recorded : f.filename;
+  }
+
+  protected details(): string {
+    const f = this.file();
+    const recorded = formatRecorded(f.recordedAt);
+    const size = this.bytes(f.size);
+    return recorded && this.name() !== recorded ? `${size} · ${recorded}` : size;
+  }
+
   protected label(): string {
     const f = this.file();
     return this.selecting() ? `${this.selected() ? 'Unselect' : 'Select'} ${f.filename}` : `Open ${f.filename}`;
@@ -110,7 +135,7 @@ export class FileTile implements OnInit, OnDestroy {
       this.url.set(given);
       return;
     }
-    if (!hasPicture(this.file().filename, this.file().contentType)) {
+    if (!hasThumbnail(this.file())) {
       return;
     }
     // Ask for the thumbnail only when the tile scrolls into view.
