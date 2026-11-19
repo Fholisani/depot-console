@@ -296,6 +296,11 @@ export class DepotApi {
     return this.get<Share[]>('/v1/shares');
   }
 
+  /** Changes a link's note; an empty one removes it. The link itself stays the same. */
+  updateShare(shareId: string, description: string | null): Observable<Share> {
+    return this.send<Share>('PATCH', `/v1/shares/${shareId}`, { description });
+  }
+
   revokeShare(shareId: string): Observable<void> {
     return this.send<void>('DELETE', `/v1/shares/${shareId}`);
   }

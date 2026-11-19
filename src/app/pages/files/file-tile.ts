@@ -19,7 +19,7 @@ export interface TileFile {
 }
 
 /** Album marks on a tile: in an album, or in a shared album. */
-export type TileMark = 'album' | 'shared' | null;
+export type TileMark = 'album' | 'shared' | 'cover' | null;
 
 /**
  * One file in a gallery: a preview picture for photos and videos with a poster (videos also show their
@@ -45,9 +45,13 @@ export type TileMark = 'album' | 'shared' | null;
           <span class="check" aria-hidden="true">{{ selected() ? '✓' : '' }}</span>
         }
         @if (mark(); as m) {
-          <span class="mark" [class.shared]="m === 'shared'" [attr.title]="m === 'shared' ? 'In a shared album' : 'In an album'">
-            {{ m === 'shared' ? '🔗' : '★' }}
-          </span>
+          @if (m === 'cover') {
+            <span class="mark cover" title="The album's cover, used in link previews">Cover</span>
+          } @else {
+            <span class="mark" [class.shared]="m === 'shared'" [attr.title]="m === 'shared' ? 'In a shared album' : 'In an album'">
+              {{ m === 'shared' ? '🔗' : '★' }}
+            </span>
+          }
         }
       </div>
       <div class="cap">
@@ -75,6 +79,7 @@ export type TileMark = 'album' | 'shared' | null;
     .mark { position: absolute; top: 0.4rem; right: 0.4rem; background: rgba(0,0,0,0.55); color: #ffd54f;
       border-radius: 999px; font-size: 0.8rem; padding: 0.1rem 0.4rem; }
     .mark.shared { color: #fff; }
+    .mark.cover { color: #fff; background: var(--ion-color-primary); font-size: 0.7rem; font-weight: 600; }
     .cap { padding: 0.4rem 0.6rem; display: grid; }
     .name { font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .size { font-size: 0.75rem; color: var(--ion-color-medium); }

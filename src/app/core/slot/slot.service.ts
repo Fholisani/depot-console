@@ -49,12 +49,29 @@ export function currentEnvironment(): Environment {
  * a link made on the passive slot opens on the passive slot (`?slot=passive` switches the visitor's
  * browser there), and a link made while developing opens on this machine only.
  */
-export function shareLinkFor(token: string): string {
+export function shareLinkFor(token: string, version?: string | null): string {
   const url = new URL(`s/${token}`, document.baseURI);
   if (currentEnvironment() === 'passive') {
     url.searchParams.set('slot', 'passive');
   }
+  if (version) {
+    url.searchParams.set('v', version);
+  }
   return url.href;
+}
+
+/**
+ * A short tag that changes when anything in a link's preview changes (name, description, note, cover).
+ * WhatsApp keeps one preview per link; a message with a new tag is a new link to it, so it fetches the
+ * new preview. The link still opens the same album with or without the tag.
+ */
+export function previewVersion(...parts: Array<string | null | undefined>): string {
+  let h = 0x811c9dc5;                                   // FNV-1a, 32-bit
+  for (const ch of parts.map((p) => p ?? '').join('\u0000')) {
+    h ^= ch.codePointAt(0)!;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
 }
 
 /**

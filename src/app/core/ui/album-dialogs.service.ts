@@ -49,6 +49,20 @@ export class AlbumDialogs {
     return { name: n, description: data?.values?.description?.trim() ?? '' };
   }
 
+  /** A link's new note ('' removes it), or null when cancelled. */
+  async editNote(current: string): Promise<string | null> {
+    const alert = await this.alerts.create({
+      header: 'Link note',
+      subHeader: 'Shows in the link preview instead of the album description.',
+      inputs: [{ name: 'note', type: 'textarea', value: current, placeholder: 'e.g. Photos from Sunday',
+        attributes: { maxlength: 280, 'aria-label': 'Link note' } }],
+      buttons: [{ text: 'Cancel', role: 'cancel' }, { text: 'Save', role: 'confirm' }],
+    });
+    await alert.present();
+    const { role, data } = await alert.onDidDismiss<{ values: { note?: string } }>();
+    return role === 'confirm' ? (data?.values?.note?.trim() ?? '') : null;
+  }
+
   /** One of the albums, or null when cancelled. */
   async pickAlbum(albums: Album[]): Promise<Album | null> {
     const alert = await this.alerts.create({

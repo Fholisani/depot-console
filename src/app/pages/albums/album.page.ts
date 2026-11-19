@@ -10,7 +10,7 @@ import {
 import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
 import type { Album, AlbumItem, Namespace, Share, ShareItemStat } from '../../core/api/models';
-import { currentEnvironment, shareLinkFor } from '../../core/slot/slot.service';
+import { currentEnvironment, previewVersion, shareLinkFor } from '../../core/slot/slot.service';
 import { SessionService } from '../../core/tenant/session.service';
 import { UploadCancelled, UploadPhase, UploadService, UploadTask } from '../../core/upload/upload.service';
 import { uploadStatusText } from '../../core/upload/upload-status';
@@ -68,7 +68,10 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
           <ion-button size="small" [routerLink]="['/app/files']" [queryParams]="{ addTo: a.id }">Add files</ion-button>
           <input #picker type="file" multiple hidden (change)="upload(picker)" />
           <ion-button size="small" fill="outline" (click)="chooseFolder(picker)" [disabled]="busy()">Upload</ion-button>
-          <ion-button size="small" fill="outline" (click)="edit(a)" [disabled]="busy()">Rename</ion-button>
+          <ion-button size="small" fill="outline" (click)="edit(a)" [disabled]="busy()">Edit name &amp; description</ion-button>
+          <ion-button size="small" fill="outline" (click)="chooseCover()" [disabled]="busy() || items().length === 0"
+            [color]="choosingCover() ? 'primary' : undefined">
+            {{ choosingCover() ? 'Cancel cover' : 'Choose cover' }}</ion-button>
           <ion-button size="small" fill="clear" [color]="selecting() ? 'primary' : 'medium'" (click)="toggleSelect()">
             {{ selecting() ? 'Done' : 'Select' }}
           </ion-button>
@@ -122,13 +125,17 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
         </div>
       }
 
+      @if (choosingCover()) {
+        <ion-text color="primary"><p role="status">Tap the picture to use as the cover. It shows in the album list
+          and in link previews (WhatsApp and others).</p></ion-text>
+      }
       @if (items().length === 0 && !loadingItems()) {
         <p>This album is empty. Use Add files to pick files you already have, or Upload to add new ones.</p>
       }
       <div class="grid">
         @for (item of items(); track item.objectId; let i = $index) {
           <app-file-tile [file]="item" [selecting]="selecting()" [selected]="selected().has(item.objectId)"
-            (activate)="onActivate(item, i)" />
+            [mark]="item.objectId === a.coverObjectId ? 'cover' : null" (activate)="onActivate(item, i)" />
         }
       </div>
       @if (loadingItems()) {
@@ -161,7 +168,8 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
             <ion-button size="small" (click)="share()" [disabled]="busy() || a.itemCount === 0">Create link</ion-button>
             @for (s of links(); track s.id) {
               <div class="share-row">
-                <code class="wrap">{{ shareUrl(s.token) }}</code>
+                <code class="wrap">{{ shareUrl(s) }}</code>
+                @if (s.description) { <ion-note>Note: {{ s.description }}</ion-note> }
                 <ion-note>
                   {{ stats(s) }}
                   @if (s.expiresAt) { · until {{ s.expiresAt | date: 'd MMM y' }} } @else { · no end date }
@@ -171,6 +179,7 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
                     <ion-button size="small" (click)="shareSheet(s)">Share…</ion-button>
                   }
                   <ion-button size="small" fill="clear" (click)="copyLink(s)">Copy message</ion-button>
+                  <ion-button size="small" fill="clear" (click)="editNote(s)" [disabled]="busy()">Edit note</ion-button>
                   <ion-button size="small" fill="clear" (click)="toggleStats(s)">
                     {{ statsFor() === s.id ? 'Hide' : 'Show' }} views per file</ion-button>
                   <ion-button size="small" fill="clear" color="danger" (click)="stopSharing(s)">Stop sharing</ion-button>
@@ -249,6 +258,8 @@ export class AlbumPage implements OnInit {
   private namespaces: Namespace[] = [];
 
   protected readonly selecting = signal(false);
+  /** Choose cover mode: the next tile tapped becomes the cover. */
+  protected readonly choosingCover = signal(false);
   protected readonly selected = signal<ReadonlySet<string>>(new Set());
 
   protected readonly viewIndex = signal<number | null>(null);
@@ -302,6 +313,10 @@ export class AlbumPage implements OnInit {
   }
 
   protected onActivate(item: AlbumItem, index: number): void {
+    if (this.choosingCover()) {
+      this.setCover(item.objectId);
+      return;
+    }
     if (this.selecting()) {
       const next = new Set(this.selected());
       if (next.has(item.objectId)) {
@@ -347,10 +362,34 @@ export class AlbumPage implements OnInit {
 
   protected makeCover(): void {
     const [cover] = [...this.selected()];
-    this.run(() => this.api.updateAlbum(this.id, { coverObjectId: cover }), (updated) => {
+    this.setCover(cover);
+  }
+
+  protected chooseCover(): void {
+    this.choosingCover.update((on) => !on);
+    this.selecting.set(false);
+    this.selected.set(new Set());
+  }
+
+  private setCover(objectId: string): void {
+    this.choosingCover.set(false);
+    this.run(() => this.api.updateAlbum(this.id, { coverObjectId: objectId }), (updated) => {
       this.album.set(updated);
-      this.message.set('Cover changed.');
+      this.message.set(this.links().length > 0
+        ? 'Cover changed. Send the link again (Share… or Copy message) for WhatsApp to show the new picture.'
+        : 'Cover changed.');
       this.selected.set(new Set());
+    });
+  }
+
+  protected async editNote(s: Share): Promise<void> {
+    const note = await this.dialogs.editNote(s.description ?? '');
+    if (note === null) {
+      return;
+    }
+    this.run(() => this.api.updateShare(s.id, note || null), () => {
+      this.message.set('Note saved. Send the link again for WhatsApp to show it.');
+      this.loadLinks();
     });
   }
 
@@ -512,8 +551,13 @@ export class AlbumPage implements OnInit {
     });
   }
 
-  protected shareUrl(token: string): string {
-    return shareLinkFor(token);
+  /**
+   * The link to send. Its tag changes with the name, description, note and cover, so WhatsApp shows the
+   * current preview instead of the one it saved the first time the link was sent.
+   */
+  protected shareUrl(s: Share): string {
+    const a = this.album();
+    return shareLinkFor(s.token, previewVersion(a?.name, a?.description, a?.coverObjectId, s.description));
   }
 
   protected stats(s: Share): string {
@@ -536,7 +580,7 @@ export class AlbumPage implements OnInit {
     const total = a?.itemCount ?? this.items().length;
     const kinds = this.cursor() ? [] : this.items().map((i) => i.kind);
     return albumMessage({ name: a?.name ?? s.name, description: a?.description }, s.description,
-      describeItems(kinds, total), this.session.tenant()?.name, this.shareUrl(s.token));
+      describeItems(kinds, total), this.session.tenant()?.name, this.shareUrl(s));
   }
 
   /** Opens the phone's share sheet (WhatsApp and others) with the message filled in. */

@@ -840,6 +840,38 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
 
   /v1/shares/{shareId}:
+    patch:
+      tags: [Sharing]
+      operationId: updateShare
+      summary: Change a link's note
+      description: |
+        The note shows in the link's preview and on the visitor page, instead of the album's description.
+        An empty or missing `description` removes it. The token stays the same, so links already sent
+        keep working.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - name: shareId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description: { type: [string, 'null'], maxLength: 280 }
+      responses:
+        '200':
+          description: The link with its new note.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Share' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
     delete:
       tags: [Sharing]
       operationId: revokeShare

@@ -484,7 +484,13 @@ export interface paths {
         delete: operations["revokeShare"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change a link's note
+         * @description The note shows in the link's preview and on the visitor page, instead of the album's description.
+         *     An empty or missing `description` removes it. The token stays the same, so links already sent
+         *     keep working.
+         */
+        patch: operations["updateShare"];
         trace?: never;
     };
     "/v1/share/{token}": {
@@ -4168,6 +4174,41 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateShare: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    description?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description The link with its new note. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Share"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
