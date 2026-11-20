@@ -9,6 +9,7 @@ import { SessionService } from '../../core/tenant/session.service';
 import { BackService } from '../../core/ui/back.service';
 import { TenantService } from '../../core/tenant/tenant.service';
 import { describeError } from '../../core/ui/format';
+import { forgetThumbnails } from '../../core/ui/thumbnail-loader';
 
 /**
  * The signed-in frame: navigation, tenant name, sign out. It activates the session first, so
@@ -93,6 +94,7 @@ export class ShellPage implements OnInit {
   }
 
   signOut(): void {
+    forgetThumbnails();             // links to this account's pictures must not outlive the session
     this.session.clear();
     this.tenants.select(null);
     this.oidc.logoff().subscribe(() => void this.router.navigateByUrl('/'));
