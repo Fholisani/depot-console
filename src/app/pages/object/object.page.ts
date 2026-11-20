@@ -6,6 +6,8 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { firstValueFrom, Subscription, type Observable } from 'rxjs';
 import { hideObject, unhideObject } from '../../core/ui/hidden-objects';
 import { ConfirmService } from '../../core/ui/confirm.service';
+import { AlbumDialogs } from '../../core/ui/album-dialogs.service';
+import { extendedMessage } from '../../core/ui/media';
 import { BackService } from '../../core/ui/back.service';
 import { currentEnvironment, shareLinkFor } from '../../core/slot/slot.service';
 import {
@@ -181,6 +183,9 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
                     <ion-button size="small" (click)="shareSheet(s)">Share…</ion-button>
                   }
                   <ion-button size="small" fill="clear" (click)="copyLink(s)">Copy message</ion-button>
+                  @if (s.expiresAt) {
+                    <ion-button size="small" fill="clear" (click)="extend(s)" [disabled]="busy()">Extend</ion-button>
+                  }
                   <ion-button size="small" fill="clear" color="danger" (click)="stopSharing(s.id)">Stop sharing</ion-button>
                 </div>
               </div>
@@ -278,6 +283,7 @@ export class ObjectPage implements OnInit, OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly confirm = inject(ConfirmService);
+  private readonly dialogs = inject(AlbumDialogs);
   protected readonly session = inject(SessionService);
   private readonly backNav = inject(BackService);
   protected readonly id = this.route.snapshot.paramMap.get('id') ?? '';
@@ -408,6 +414,16 @@ export class ObjectPage implements OnInit, OnDestroy {
       this.message.set('Message copied, with the file name and the link. Paste it in a chat to share.');
     } catch {
       this.message.set(text);
+    }
+  }
+
+  protected async extend(s: Share): Promise<void> {
+    const choice = await this.dialogs.extendLink(s.expiresAt);
+    if (choice) {
+      this.run(() => this.api.extendShare(s.id, choice), (updated) => {
+        this.message.set(extendedMessage(updated.expiresAt));
+        this.loadShares();
+      });
     }
   }
 

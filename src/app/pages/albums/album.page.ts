@@ -18,7 +18,7 @@ import { DuplicateGuard } from '../../core/upload/duplicate-guard.service';
 import { AlbumDialogs } from '../../core/ui/album-dialogs.service';
 import { ConfirmService } from '../../core/ui/confirm.service';
 import { describeError, formatBytes } from '../../core/ui/format';
-import { type MediaKind, linkStats } from '../../core/ui/media';
+import { extendedMessage, linkStats, type MediaKind } from '../../core/ui/media';
 import { MediaViewer, type ViewerItem } from '../../core/ui/media-viewer';
 import {
   albumMessage, canShareNatively, describeItems, messageText, shareNatively, type ShareMessage,
@@ -180,6 +180,9 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
                   }
                   <ion-button size="small" fill="clear" (click)="copyLink(s)">Copy message</ion-button>
                   <ion-button size="small" fill="clear" (click)="editNote(s)" [disabled]="busy()">Edit note</ion-button>
+                  @if (s.expiresAt) {
+                    <ion-button size="small" fill="clear" (click)="extend(s)" [disabled]="busy()">Extend</ion-button>
+                  }
                   <ion-button size="small" fill="clear" (click)="toggleStats(s)">
                     {{ statsFor() === s.id ? 'Hide' : 'Show' }} views per file</ion-button>
                   <ion-button size="small" fill="clear" color="danger" (click)="stopSharing(s)">Stop sharing</ion-button>
@@ -380,6 +383,16 @@ export class AlbumPage implements OnInit {
         : 'Cover changed.');
       this.selected.set(new Set());
     });
+  }
+
+  protected async extend(s: Share): Promise<void> {
+    const choice = await this.dialogs.extendLink(s.expiresAt);
+    if (choice) {
+      this.run(() => this.api.extendShare(s.id, choice), (updated) => {
+        this.message.set(extendedMessage(updated.expiresAt));
+        this.loadLinks();
+      });
+    }
   }
 
   protected async editNote(s: Share): Promise<void> {

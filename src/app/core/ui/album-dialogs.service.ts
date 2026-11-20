@@ -49,6 +49,32 @@ export class AlbumDialogs {
     return { name: n, description: data?.values?.description?.trim() ?? '' };
   }
 
+  /**
+   * How much longer a link should work, or null when cancelled. The address stays the same, so the
+   * people who already have it keep using it.
+   */
+  async extendLink(expiresAt: string | null | undefined): Promise<{ days: number } | { noEnd: true } | null> {
+    const until = expiresAt ? new Date(expiresAt).toLocaleDateString(undefined,
+      { day: 'numeric', month: 'short', year: 'numeric' }) : null;
+    const alert = await this.alerts.create({
+      header: 'Extend link',
+      subHeader: until ? `Works until ${until}. Same link, so nobody needs a new one.` : undefined,
+      inputs: [
+        { type: 'radio', label: '7 more days', value: '7', checked: true },
+        { type: 'radio', label: '30 more days', value: '30' },
+        { type: 'radio', label: '1 more year', value: '365' },
+        { type: 'radio', label: 'No end date (until I stop sharing)', value: 'none' },
+      ],
+      buttons: [{ text: 'Cancel', role: 'cancel' }, { text: 'Extend', role: 'confirm' }],
+    });
+    await alert.present();
+    const { role, data } = await alert.onDidDismiss<{ values: string }>();
+    if (role !== 'confirm' || !data?.values) {
+      return null;
+    }
+    return data.values === 'none' ? { noEnd: true } : { days: Number(data.values) };
+  }
+
   /** A link's new note ('' removes it), or null when cancelled. */
   async editNote(current: string): Promise<string | null> {
     const alert = await this.alerts.create({

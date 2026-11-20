@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  formatDuration, formatRecorded, hasPicture, hasThumbnail, isNumericName, kindOf, linkStats, timeAgo,
+  extendedMessage, formatDuration, formatRecorded, hasPicture, hasThumbnail, isNumericName, kindOf, linkStats, timeAgo,
 } from './media';
 
 describe('media helpers', () => {
@@ -62,5 +62,11 @@ describe('media helpers', () => {
     expect(isNumericName('1703442605.mov')).toBe(true);
     expect(isNumericName('IMG_0629.mov')).toBe(false);
     expect(isNumericName('birthday.mp4')).toBe(false);
+  });
+
+  it('tells the owner how long an extended link now works', () => {
+    expect(extendedMessage(null)).toContain('until you stop sharing');
+    expect(extendedMessage('2027-01-15T10:00:00Z')).toMatch(/until .*2027/);
+    expect(extendedMessage('2027-01-15T10:00:00Z')).toContain('nothing to resend');
   });
 });

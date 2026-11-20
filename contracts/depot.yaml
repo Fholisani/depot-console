@@ -888,6 +888,41 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /v1/shares/{shareId}/extend:
+    post:
+      tags: [Sharing]
+      operationId: extendShare
+      summary: Give a link more time
+      description: |
+        Adds `days` to the link's end date (counted from now if it would otherwise end sooner), or removes
+        the end date with `noEnd: true`. The address stays the same, so people who already have the link
+        keep using it. Only links that still work can be extended; expired or revoked ones answer 404.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - name: shareId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                days: { type: [integer, 'null'], minimum: 1, maximum: 3650 }
+                noEnd: { type: [boolean, 'null'] }
+      responses:
+        '200':
+          description: The link with its new end date.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Share' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /v1/share/{token}:
     get:
       tags: [Sharing]

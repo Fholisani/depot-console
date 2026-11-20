@@ -493,6 +493,28 @@ export interface paths {
         patch: operations["updateShare"];
         trace?: never;
     };
+    "/v1/shares/{shareId}/extend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Give a link more time
+         * @description Adds `days` to the link's end date (counted from now if it would otherwise end sooner), or removes
+         *     the end date with `noEnd: true`. The address stays the same, so people who already have the link
+         *     keep using it. Only links that still work can be extended; expired or revoked ones answer 404.
+         */
+        post: operations["extendShare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/share/{token}": {
         parameters: {
             query?: never;
@@ -4200,6 +4222,42 @@ export interface operations {
         };
         responses: {
             /** @description The link with its new note. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Share"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    extendShare: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    days?: number | null;
+                    noEnd?: boolean | null;
+                };
+            };
+        };
+        responses: {
+            /** @description The link with its new end date. */
             200: {
                 headers: {
                     [name: string]: unknown;

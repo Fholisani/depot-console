@@ -301,7 +301,12 @@ export class DepotApi {
     return this.send<Share>('PATCH', `/v1/shares/${shareId}`, { description });
   }
 
-  revokeShare(shareId: string): Observable<void> {
+  /** More time for a working link (`days`), or no end date (`noEnd`). The address stays the same. */
+  extendShare(shareId: string, body: { days?: number; noEnd?: boolean }): Observable<Share> {
+    return this.send<Share>('POST', `/v1/shares/${shareId}/extend`, body);
+  }
+
+    revokeShare(shareId: string): Observable<void> {
     return this.send<void>('DELETE', `/v1/shares/${shareId}`);
   }
 

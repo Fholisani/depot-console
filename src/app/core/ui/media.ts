@@ -123,6 +123,15 @@ export function timeAgo(iso: string | null | undefined, now = Date.now()): strin
   return new Date(then).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+/** What to tell the owner after a link was extended. */
+export function extendedMessage(expiresAt: string | null | undefined): string {
+  if (!expiresAt) {
+    return 'Link extended: it now works until you stop sharing. Same link, nothing to resend.';
+  }
+  const until = new Date(expiresAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  return `Link extended: it now works until ${until}. Same link, nothing to resend.`;
+}
+
 /** "12 views · 4 downloads · last opened 2 hours ago" for a share link. */
 export function linkStats(s: { views: number; downloads: number; lastViewedAt?: string | null }, now = Date.now()): string {
   const views = `${s.views} ${s.views === 1 ? 'view' : 'views'}`;
