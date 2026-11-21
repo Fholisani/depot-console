@@ -22,13 +22,62 @@ const STALL_MS = 60_000;
 const PART_CONCURRENCY = 3;
 const PART_ATTEMPTS = 3;
 /** Attempts for a single-request upload when storage is briefly unavailable, and the wait before each retry. */
-const SIMPLE_ATTEMPTS = 3;
-const SIMPLE_RETRY_DELAYS_MS = [2000, 5000];
+const SIMPLE_ATTEMPTS = 6;
+const SIMPLE_RETRY_DELAYS_MS = [2000, 4000, 6000, 8000, 10000];
 
-/** Failures that may succeed if sent again: storage briefly offline, or the connection dropped. */
+/**
+ * Failures that may succeed if sent again: storage briefly offline, the connection dropped, or the
+ * service busy (it takes a limited number of uploads at once and asks the rest to come back).
+ */
 function retryable(e: unknown): boolean {
-  return e instanceof ApiError && (e.reason === 'STORAGE_UNAVAILABLE' || e.reason === 'NETWORK_ERROR');
+  return e instanceof ApiError
+    && (e.reason === 'STORAGE_UNAVAILABLE' || e.reason === 'NETWORK_ERROR' || e.reason === 'RATE_LIMITED');
 }
+
+/**
+ * How many files are sent at the same time, for the whole page (Files and album uploads share it).
+ * Any number can be chosen; the rest wait their turn. Sending all at once was not faster (they share
+ * the connection) and 54 small files at once filled the service's memory (2026-11-21). Large files
+ * still send three parts at a time each.
+ */
+export const FILES_AT_ONCE = 3;
+
+/** First come, first served slots for files being sent. */
+class FileSlots {
+  private free = FILES_AT_ONCE;
+  private readonly queue: Array<() => void> = [];
+
+  /** Resolves when a slot is free; `abandon` removes the waiter (a cancelled file). */
+  take(): { ready: Promise<void>; abandon: () => void } {
+    if (this.free > 0) {
+      this.free--;
+      return { ready: Promise.resolve(), abandon: () => undefined };
+    }
+    let wake!: () => void;
+    const ready = new Promise<void>((resolve) => (wake = resolve));
+    const waiter = (): void => {
+      this.free--;
+      wake();
+    };
+    this.queue.push(waiter);
+    return {
+      ready,
+      abandon: () => {
+        const i = this.queue.indexOf(waiter);
+        if (i >= 0) {
+          this.queue.splice(i, 1);
+        }
+      },
+    };
+  }
+
+  give(): void {
+    this.free++;
+    this.queue.shift()?.();
+  }
+}
+
+const fileSlots = new FileSlots();
 
 /** What an upload is doing right now, for the progress display. */
 /**
@@ -37,10 +86,11 @@ function retryable(e: unknown): boolean {
  * would start those parts again.
  */
 /**
+ * `queued`: chosen and waiting for its turn (see {@link FILES_AT_ONCE}).
  * `waiting`: the connection dropped (for example the phone screen locked); the parts already stored are
  * kept and the upload carries on by itself when the page is back and online.
  */
-export type UploadPhase = 'preparing' | 'uploading' | 'pausing' | 'paused' | 'waiting' | 'finishing';
+export type UploadPhase = 'queued' | 'preparing' | 'uploading' | 'pausing' | 'paused' | 'waiting' | 'finishing';
 
 export interface UploadProgress {
   phase: UploadPhase;
@@ -185,6 +235,10 @@ export class UploadTask {
   private readonly awake = new ScreenAwake();
   /** Set when a part failed: the other workers stop before sending more. */
   private halted = false;
+  /** Holds one of the page's file slots; given back when done, cancelled or paused. */
+  private holdsSlot = false;
+  /** Stops waiting for a slot (cancelled while queued). */
+  private leaveQueue: (() => void) | null = null;
   private readonly key: string;
 
   constructor(
@@ -197,8 +251,46 @@ export class UploadTask {
     this.key = sessionKey(namespace, file);
   }
 
-  start(): Promise<ObjectResult> {
-    return this.pausable ? this.multipart() : this.simple();
+  async start(): Promise<ObjectResult> {
+    await this.waitForTurn();
+    try {
+      return await (this.pausable ? this.multipart() : this.simple());
+    } finally {
+      this.giveBackSlot();
+    }
+  }
+
+  /** Waits for a free file slot, showing `queued`; throws {@link UploadCancelled} if cancelled meanwhile. */
+  private async waitForTurn(): Promise<void> {
+    if (this.cancelled) {
+      throw new UploadCancelled();
+    }
+    const turn = fileSlots.take();
+    let cancelledWhileQueued = false;
+    const stop = new Promise<void>((resolve) => (this.leaveQueue = () => {
+      cancelledWhileQueued = true;
+      turn.abandon();
+      resolve();
+    }));
+    let got = false;
+    void turn.ready.then(() => (got = true));
+    await Promise.resolve();
+    if (!got) {
+      this.onProgress({ phase: 'queued', percent: this.percent() });
+    }
+    await Promise.race([turn.ready, stop]);
+    this.leaveQueue = null;
+    if (cancelledWhileQueued) {
+      throw new UploadCancelled();
+    }
+    this.holdsSlot = true;
+  }
+
+  private giveBackSlot(): void {
+    if (this.holdsSlot) {
+      this.holdsSlot = false;
+      fileSlots.give();
+    }
   }
 
   pause(): void {
@@ -227,6 +319,7 @@ export class UploadTask {
       return;
     }
     this.cancelled = true;
+    this.leaveQueue?.();
     this.inflight.forEach((x) => x.abort());
     this.simpleSub?.unsubscribe();
     this.resumeWaiter?.();
@@ -321,7 +414,12 @@ export class UploadTask {
             }
             if (this.paused) {
               this.onProgress({ phase: 'paused', percent: this.percent() });
+              // A paused file lets the next one go meanwhile, then waits its turn again on resume.
+              this.giveBackSlot();
               await new Promise<void>((r) => (this.resumeWaiter = r));
+              if (!this.cancelled) {
+                await this.waitForTurn();
+              }
             } else if (this.etags.size === session.partCount) {
               break;
             }

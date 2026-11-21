@@ -1,5 +1,5 @@
 import { HttpErrorResponse, HttpEventType } from '@angular/common/http';
-import { of, throwError } from 'rxjs';
+import { Subject, of, throwError } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/api-error';
 import type { DepotApi } from '../api/depot-api.service';
@@ -214,9 +214,17 @@ describe('UploadTask small-file retry', () => {
     expect(calls()).toBe(3);
   });
 
-  it('gives up after three attempts and reports the storage error', async () => {
+  it('gives up after six attempts and reports the storage error', async () => {
     const { result, calls } = await run([throwError(storageDown)]);
     await expect(result).rejects.toMatchObject({ reason: 'STORAGE_UNAVAILABLE' });
+    expect(calls()).toBe(6);
+  });
+
+  it('waits and tries again when the service is busy with other uploads', async () => {
+    const busy = (): HttpErrorResponse => new HttpErrorResponse({ status: 429,
+      error: { data: null, message: 'x', errors: [{ code: 3901, message: 'Busy', reason: 'RATE_LIMITED' }] } });
+    const { result, calls } = await run([throwError(busy), throwError(busy), ok]);
+    await expect(result).resolves.toMatchObject({ objectId: 'o1' });
     expect(calls()).toBe(3);
   });
 
@@ -373,4 +381,107 @@ describe('UploadTask survives a dropped connection and a page reload', () => {
     expect(video.size).toBeGreaterThan(RESUMABLE_FROM);
     expect(new UploadTask(api, 'default', video, () => undefined).pausable).toBe(true);
   });
+});
+
+describe('Upload queue: any number of files, three sent at a time', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Small files go in one request; each stays open until the test answers it. */
+  const simpleApi = (): { api: DepotApi; open: Array<Subject<unknown>> } => {
+    const open: Array<Subject<unknown>> = [];
+    const api = {
+      uploadSimple: () => {
+        const s = new Subject<unknown>();
+        open.push(s);
+        return s;
+      },
+    } as unknown as DepotApi;
+    return { api, open };
+  };
+  const answer = (s: Subject<unknown>, id: string): void => {
+    s.next({ type: HttpEventType.Response, body: { data: { objectId: id, status: 'READY' } } });
+    s.complete();
+  };
+  const small = (name: string): File => new File([new Uint8Array(10)], name);
+
+  it('sends three, keeps the rest waiting, and starts the next as each one finishes', async () => {
+    const { api, open } = simpleApi();
+    const phases = new Map<string, string>();
+    const results = ['a', 'b', 'c', 'd', 'e'].map((n) =>
+      new UploadTask(api, 'default', small(`${n}.jpg`), (p) => phases.set(n, p.phase)).start());
+    await until(() => open.length === 3, 'three requests on the wire');
+    await settle();
+    expect(open).toHaveLength(3);
+    expect(phases.get('d')).toBe('queued');
+    expect(phases.get('e')).toBe('queued');
+    answer(open[0], 'o1');
+    await until(() => open.length === 4, 'the fourth starts when the first is done');
+    expect(open).toHaveLength(4);
+    open.slice(1).forEach((s, i) => answer(s, `o${i + 2}`));
+    await until(() => open.length === 5, 'the fifth starts');
+    answer(open[4], 'o5');
+    // The first three hash in parallel, so which reaches the server first varies; all five finish.
+    expect((await Promise.all(results)).map((r) => r.objectId).sort()).toEqual(['o1', 'o2', 'o3', 'o4', 'o5']);
+  });
+
+  it('a file cancelled while waiting never starts and gives no slot away', async () => {
+    const { api, open } = simpleApi();
+    const tasks = ['a', 'b', 'c', 'd', 'e'].map((n) => new UploadTask(api, 'default', small(`${n}.jpg`), () => undefined));
+    const results = tasks.map((t) => t.start());
+    await until(() => open.length === 3, 'three on the wire');
+    tasks[3].cancel();
+    await expect(results[3]).rejects.toThrow('Upload cancelled');
+    answer(open[0], 'o1');
+    await until(() => open.length === 4, 'the next waiting file starts');
+    await settle();
+    expect(open).toHaveLength(4);                      // e started, d did not
+    open.slice(1).forEach((s, i) => answer(s, `o${i + 2}`));
+    await expect(results[4]).resolves.toMatchObject({ objectId: expect.stringMatching(/^o[2-4]$/) });
+    await Promise.all([results[0], results[1], results[2]]);
+  });
+
+  it('a paused large file lets a waiting file go, then waits its turn again on resume', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+    FakeXhr.all = [];
+    const received = new Map<number, number>();
+    const partCount = 2;
+    const { api: simple, open } = simpleApi();
+    const api = {
+      ...simple,
+      createUpload: () => of({ uploadId: 'u9', partSize: PART, partCount }),
+      partTarget: (_id: string, n: number) => of({ partNumber: n, request: { url: `big-${n}`, method: 'PUT', headers: {} } }),
+      uploadStatus: () => of({
+        received: [...received].map(([partNumber, size]) => ({ partNumber, size, etag: `"etag-big-${partNumber}"` })),
+        missing: Array.from({ length: partCount }, (_, i) => i + 1).filter((n) => !received.has(n)),
+      }),
+      completeUpload: () => of({ objectId: 'big', status: 'READY' }),
+      abortUpload: () => of(undefined),
+    } as unknown as DepotApi;
+    const phases: string[] = [];
+    const big = new UploadTask(api, 'default', new File([new ArrayBuffer(2 * PART)], 'ride.mov'), (p) => phases.push(p.phase));
+    const bigResult = big.start();
+    const others = ['b', 'c', 'd'].map((n) => new UploadTask(api, 'default', small(`${n}.jpg`), () => undefined).start());
+    await until(() => open.length === 2 && FakeXhr.all.length >= 1, 'big file and two small ones going, the third waiting');
+    await settle();
+    expect(open).toHaveLength(2);
+    big.pause();
+    FakeXhr.all.filter((x) => !x.aborted && x.status === 0).forEach((x) => {
+      received.set(Number(x.url.split('-')[1]), PART);
+      x.finish();
+    });
+    await until(() => phases.at(-1) === 'paused', 'paused');
+    await until(() => open.length === 3, 'the waiting small file takes the paused file\'s slot');
+    expect(open).toHaveLength(3);
+    big.resume();
+    await until(() => phases.at(-1) === 'queued', 'resumed file waits for a free slot');
+    answer(open[0], 'o1');
+    await until(() => FakeXhr.all.some((x) => !x.aborted && x.status === 0) || received.size === partCount, 'big resumes');
+    FakeXhr.all.filter((x) => !x.aborted && x.status === 0).forEach((x) => {
+      received.set(Number(x.url.split('-')[1]), PART);
+      x.finish();
+    });
+    open.slice(1).forEach((s, i) => answer(s, `o${i + 2}`));
+    await expect(bigResult).resolves.toMatchObject({ objectId: 'big' });
+    await Promise.all(others);
+  }, 60_000);
 });

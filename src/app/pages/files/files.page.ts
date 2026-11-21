@@ -114,7 +114,8 @@ interface UploadJob {
         } @else if (job.result; as r) {
           <a [routerLink]="['/app/files', r.objectId]">Uploaded · {{ r.status }}</a>
         } @else {
-          @if (job.phase === 'uploading' || job.phase === 'pausing' || job.phase === 'paused' || job.phase === 'waiting') {
+          @if (job.phase === 'uploading' || job.phase === 'pausing' || job.phase === 'paused' || job.phase === 'waiting'
+            || job.phase === 'queued') {
             <ion-progress-bar [value]="job.percent / 100" [color]="job.phase === 'uploading' ? 'primary' : 'medium'"
               [attr.aria-label]="'Uploading ' + job.name" />
           } @else {

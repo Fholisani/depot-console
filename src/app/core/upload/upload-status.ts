@@ -6,6 +6,9 @@ import type { UploadPhase } from './upload.service';
  * "Connection lost at 42% … continues by itself", "Preparing…", "Finishing…".
  */
 export function uploadStatusText(phase: UploadPhase | undefined, percent: number, size?: number): string {
+  if (phase === 'queued') {
+    return percent > 0 ? `Waiting for its turn (${percent}% kept)` : 'Waiting for its turn…';
+  }
   if (phase === 'preparing') {
     return 'Preparing…';
   }
