@@ -251,12 +251,50 @@ export class UploadTask {
     this.key = sessionKey(namespace, file);
   }
 
-  async start(): Promise<ObjectResult> {
+  /**
+   * Sends the file. `storedSince` (a retry of an earlier attempt): if the folder already got this file
+   * (same name and size) since then, that copy is the result and nothing is sent again. A dropped
+   * connection can lose the reply after storage already kept the file.
+   */
+  async start(opts?: { storedSince?: number }): Promise<ObjectResult> {
     await this.waitForTurn();
     try {
+      if (opts?.storedSince !== undefined) {
+        const stored = await this.alreadyStored(opts.storedSince);
+        if (stored) {
+          return stored;
+        }
+      }
       return await (this.pausable ? this.multipart() : this.simple());
     } finally {
       this.giveBackSlot();
+    }
+  }
+
+  /**
+   * The copy of this file the folder got since `sinceMs`, or null. Same name and size, the rule the
+   * duplicate check uses. Never throws: when it cannot tell, the file is simply sent again.
+   */
+  private async alreadyStored(sinceMs: number): Promise<ObjectResult | null> {
+    try {
+      const found = await firstValueFrom(this.api.duplicates(this.namespace,
+        [{ filename: this.file.name, size: this.file.size }]));
+      const match = found.duplicates.find((d) => d.filename === this.file.name && d.size === this.file.size
+        && Date.parse(d.createdAt) >= sinceMs - 60_000);
+      if (!match) {
+        return null;
+      }
+      const o = await firstValueFrom(this.api.object(match.objectId));
+      const v = o.latest;
+      if (!v) {
+        return null;
+      }
+      return {
+        objectId: o.objectId, versionId: v.versionId, status: v.status,
+        filename: v.filename, contentType: v.contentType, size: v.size, sha256: v.sha256,
+      } as ObjectResult;
+    } catch {
+      return null;
     }
   }
 
@@ -335,6 +373,7 @@ export class UploadTask {
 
   private async simple(): Promise<ObjectResult> {
     this.onProgress({ phase: 'preparing', percent: 0 });
+    const started = Date.now();
     const sha = await sha256Hex(this.file);
     for (let attempt = 1; ; attempt++) {
       if (this.cancelled) {
@@ -343,12 +382,27 @@ export class UploadTask {
       try {
         return await this.simpleOnce(sha);
       } catch (e) {
-        if (this.cancelled || !retryable(e) || attempt >= SIMPLE_ATTEMPTS) {
+        if (this.cancelled || !retryable(e)) {
           throw e;
         }
-        // Storage was briefly unavailable: wait, then send the file again from the start.
-        this.onProgress({ phase: 'preparing', percent: 0 });
+        const lostConnection = e instanceof ApiError && e.reason === 'NETWORK_ERROR';
+        this.onProgress({ phase: lostConnection ? 'waiting' : 'preparing', percent: 0 });
+        if (lostConnection) {
+          // The reply may be what got lost: storage can have kept the file. Once back online, ask
+          // before sending it again, so a dropped connection never makes a second copy.
+          await whenBackOnline();
+        }
         await this.wait(SIMPLE_RETRY_DELAYS_MS[attempt - 1] ?? 5000);
+        if (lostConnection) {
+          const stored = await this.alreadyStored(started);
+          if (stored) {
+            return stored;
+          }
+        }
+        if (attempt >= SIMPLE_ATTEMPTS) {
+          throw e;
+        }
+        this.onProgress({ phase: 'preparing', percent: 0 });
       }
     }
   }

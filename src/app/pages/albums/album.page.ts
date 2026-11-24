@@ -81,12 +81,18 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
       }
       @if (uploadSummary(); as sum) {
         <ion-text [color]="sum.failed > 0 ? 'warning' : 'success'"><p role="status">{{ sum.text }}</p></ion-text>
+        @if (retryable().length > 0) {
+          <ion-button size="small" (click)="retryFailed()">Try again for {{ retryable().length }} failed</ion-button>
+        }
       }
       @for (u of uploads(); track u.id) {
         <div class="job">
           <span>{{ u.name }}</span>
           @if (u.error) {
             <ion-text color="danger"><span role="alert">{{ u.error }}</span></ion-text>
+            @if (canRetry(u)) {
+              <ion-button size="small" fill="outline" (click)="retryUpload(u)">Try again</ion-button>
+            }
           } @else if (u.done) {
             <ion-text color="success"><span>✓ {{ u.note ?? 'Uploaded · ' + bytes(u.size) + ' · added to the album' }}</span></ion-text>
           } @else {
@@ -465,6 +471,8 @@ export class AlbumPage implements OnInit {
 
   /** Running uploads by job id, for pause, resume and cancel. */
   private readonly tasks = new Map<string, UploadTask>();
+  /** The chosen files and when each was first sent, kept so a failed one can be tried again. */
+  private readonly files = new Map<string, { file: File; folder: string; startedAt: number }>();
   private readonly duplicateGuard = inject(DuplicateGuard);
 
   /** One line after a batch: how many uploaded, how much, and where they are in the album. */
@@ -534,24 +542,59 @@ export class AlbumPage implements OnInit {
     }
     const jobs = files.map((f) => ({ id: crypto.randomUUID(), name: f.name, percent: 0, size: f.size, file: f }));
     this.uploads.update((list) => [...jobs.map(({ file: _f, ...j }) => j), ...list]);
-    const update = (id: string, patch: Partial<AlbumUpload>): void =>
-      this.uploads.update((list) => list.map((u) => (u.id === id ? { ...u, ...patch } : u)));
-    await Promise.all(jobs.map(async (job) => {
-      try {
-        const task = this.uploader.create(folder, job.file,
-          (p) => update(job.id, { percent: p.percent, phase: p.phase }));
-        this.tasks.set(job.id, task);
-        const result = await task.start();
-        await firstValueFrom(this.api.addToAlbum(this.id, [result.objectId]));
-        update(job.id, { done: true, percent: 100 });
-      } catch (e) {
-        update(job.id, {
-          error: e instanceof UploadCancelled ? 'Cancelled' : describeError(ApiError.from(e), PROBLEMS),
-        });
-      } finally {
-        this.tasks.delete(job.id);
-      }
-    }));
+    jobs.forEach((job) => this.files.set(job.id, { file: job.file, folder, startedAt: Date.now() }));
+    await Promise.all(jobs.map((job) => this.sendOne(job.id)));
+    this.reload();
+  }
+
+  private updateUpload(id: string, patch: Partial<AlbumUpload>): void {
+    this.uploads.update((list) => list.map((u) => (u.id === id ? { ...u, ...patch } : u)));
+  }
+
+  /**
+   * Sends one chosen file and adds it to the album. A retry first asks whether the folder already got
+   * it since the first try (a dropped connection can lose the reply after the file was stored), so it
+   * is never stored twice.
+   */
+  private async sendOne(id: string, retry = false): Promise<void> {
+    const chosen = this.files.get(id);
+    if (!chosen) {
+      return;
+    }
+    try {
+      const task = this.uploader.create(chosen.folder, chosen.file,
+        (p) => this.updateUpload(id, { percent: p.percent, phase: p.phase }));
+      this.tasks.set(id, task);
+      const result = await task.start(retry ? { storedSince: chosen.startedAt } : undefined);
+      await firstValueFrom(this.api.addToAlbum(this.id, [result.objectId]));
+      this.updateUpload(id, { done: true, percent: 100, error: undefined });
+    } catch (e) {
+      this.updateUpload(id, {
+        error: e instanceof UploadCancelled ? 'Cancelled' : describeError(ApiError.from(e), PROBLEMS),
+      });
+    } finally {
+      this.tasks.delete(id);
+    }
+  }
+
+  /** Failed (not cancelled) uploads whose file is still at hand. */
+  protected readonly retryable = computed(() =>
+    this.uploads().filter((u) => this.canRetry(u)));
+
+  protected canRetry(u: AlbumUpload): boolean {
+    return !!u.error && u.error !== 'Cancelled' && this.files.has(u.id);
+  }
+
+  protected async retryUpload(u: AlbumUpload): Promise<void> {
+    this.updateUpload(u.id, { error: undefined, done: false, percent: 0, phase: 'queued' });
+    await this.sendOne(u.id, true);
+    this.reload();
+  }
+
+  protected async retryFailed(): Promise<void> {
+    const failed = this.retryable();
+    failed.forEach((u) => this.updateUpload(u.id, { error: undefined, done: false, percent: 0, phase: 'queued' }));
+    await Promise.all(failed.map((u) => this.sendOne(u.id, true)));
     this.reload();
   }
 

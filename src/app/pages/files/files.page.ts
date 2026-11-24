@@ -41,6 +41,8 @@ interface UploadJob {
   phase?: UploadPhase;
   error?: string;
   result?: ObjectResult;
+  /** When it was first sent; a retry does not send it again if the folder got it since. */
+  startedAt?: number;
 }
 
 /**
@@ -624,7 +626,9 @@ export class FilesPage implements OnInit {
     if (files.length === 0) {
       return;
     }
-    const jobs = files.map((file): UploadJob => ({ id: crypto.randomUUID(), name: file.name, file, target, percent: 0 }));
+    const jobs = files.map((file): UploadJob => ({
+      id: crypto.randomUUID(), name: file.name, file, target, percent: 0, startedAt: Date.now(),
+    }));
     this.jobs.update((j) => [...jobs, ...j]);
     // Side by side, so pausing one does not hold up the others.
     await Promise.all(jobs.map((job) => this.run(job)));
@@ -658,11 +662,11 @@ export class FilesPage implements OnInit {
   }
 
   protected async retry(job: UploadJob): Promise<void> {
-    await this.run(job);
+    await this.run(job, true);
     this.load(true);
   }
 
-  private async run(job: UploadJob): Promise<void> {
+  private async run(job: UploadJob, retry = false): Promise<void> {
     if (!job.file) {
       return;
     }
@@ -672,7 +676,7 @@ export class FilesPage implements OnInit {
     const task = this.uploads.create(job.target, job.file, (p) => update({ percent: p.percent, phase: p.phase }));
     this.tasks.set(job.id, task);
     try {
-      update({ result: await task.start() });
+      update({ result: await task.start(retry && job.startedAt ? { storedSince: job.startedAt } : undefined) });
     } catch (e) {
       update(e instanceof UploadCancelled
         ? { cancelled: true }

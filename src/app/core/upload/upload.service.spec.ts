@@ -485,3 +485,57 @@ describe('Upload queue: any number of files, three sent at a time', () => {
     await Promise.all(others);
   }, 60_000);
 });
+
+describe('A reply lost after the file was stored', () => {
+  afterEach(() => vi.useRealTimers());
+
+  const stored = { objectId: 'kept', latest: { versionId: 'v1', status: 'READY', filename: 'IMG_0777.jpeg',
+    contentType: 'image/jpeg', size: 10, sha256: null } };
+  const lost = (): HttpErrorResponse => new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' });
+
+  it('asks before sending again, and takes the stored copy instead of making a second one', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let sends = 0;
+    const api = {
+      uploadSimple: () => { sends++; return throwError(lost); },
+      duplicates: () => of({ duplicates: [{ filename: 'IMG_0777.jpeg', size: 10, objectId: 'kept', namespace: 'default',
+        createdAt: new Date().toISOString() }] }),
+      object: () => of(stored),
+    } as unknown as DepotApi;
+    const task = new UploadTask(api, 'default', new File([new Uint8Array(10)], 'IMG_0777.jpeg'), () => undefined);
+    let settled = false;
+    const result = task.start();
+    result.then(() => (settled = true), () => (settled = true));
+    for (let i = 0; i < 200 && !settled; i++) {
+      await vi.advanceTimersByTimeAsync(1000);
+      await realTick();
+    }
+    await expect(result).resolves.toMatchObject({ objectId: 'kept', versionId: 'v1' });
+    expect(sends).toBe(1);
+  });
+
+  it('a retry finds the copy kept since the first try and sends nothing', async () => {
+    let sends = 0;
+    const firstTry = Date.now() - 5 * 60_000;
+    const api = {
+      uploadSimple: () => { sends++; return throwError(lost); },
+      duplicates: () => of({ duplicates: [{ filename: 'a.jpeg', size: 10, objectId: 'kept', namespace: 'default',
+        createdAt: new Date(firstTry + 1000).toISOString() }] }),
+      object: () => of(stored),
+    } as unknown as DepotApi;
+    const task = new UploadTask(api, 'default', new File([new Uint8Array(10)], 'a.jpeg'), () => undefined);
+    await expect(task.start({ storedSince: firstTry })).resolves.toMatchObject({ objectId: 'kept' });
+    expect(sends).toBe(0);
+  });
+
+  it('an older copy with the same name does not count: the retry sends the file', async () => {
+    const api = {
+      uploadSimple: () => of({ type: HttpEventType.Response, body: { data: { objectId: 'new', status: 'READY' } } }),
+      duplicates: () => of({ duplicates: [{ filename: 'a.jpeg', size: 10, objectId: 'old', namespace: 'default',
+        createdAt: '2024-01-01T00:00:00Z' }] }),
+      object: () => of(stored),
+    } as unknown as DepotApi;
+    const task = new UploadTask(api, 'default', new File([new Uint8Array(10)], 'a.jpeg'), () => undefined);
+    await expect(task.start({ storedSince: Date.now() - 60_000 })).resolves.toMatchObject({ objectId: 'new' });
+  });
+});
