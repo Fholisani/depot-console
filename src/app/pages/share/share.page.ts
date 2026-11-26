@@ -30,8 +30,10 @@ const VISITOR_PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
   INSUFFICIENT_SCOPE: 'The owner has switched off adding files to this album.',
   CONTENT_TYPE_NOT_ALLOWED: 'Only photos and videos can be added to this album.',
   OBJECT_TOO_LARGE: 'This file is too big: files can be at most 2 GB.',
-  RATE_LIMITED: 'This album has taken all the files it can for today. Try again tomorrow.',
-  QUOTA_STORAGE_EXCEEDED: "The album owner's storage is full.",
+  DAILY_LIMIT_REACHED: 'This album has taken all the files it can for today. Try again tomorrow.',
+  RATE_LIMITED: 'Several people are adding files right now. Try again in a few minutes.',
+  QUOTA_STORAGE_EXCEEDED: "The album owner's storage is nearly full.",
+  VALIDATION_ERROR: 'This file could not be added (empty, or the album is full).',
   RESOURCE_NOT_FOUND: "This link doesn't work anymore.",
 };
 
@@ -66,12 +68,16 @@ const KIND_LABEL: Record<string, string> = {
           @if ((l.itemCount ?? 0) > 0) {
             <ion-button [href]="archiveUrl()" size="default">Download all ({{ bytes(l.size) }})</ion-button>
           }
-          @if (l.uploadsAllowed) {
+          @if (l.uploadsAllowed || uploads().length > 0) {
             <div class="addbox">
-              <input #picker type="file" multiple accept="image/*,video/*" hidden (change)="addFiles(picker)" />
-              <ion-button fill="outline" (click)="picker.click()">Add your photos and videos</ion-button>
-              <p class="muted">They are added to this album for everyone with the link. Photos and videos only,
-                up to 2 GB each.</p>
+              @if (l.uploadsAllowed) {
+                <input #picker type="file" multiple accept="image/*,video/*" hidden (change)="addFiles(picker)" />
+                <ion-button fill="outline" (click)="picker.click()">Add your photos and videos</ion-button>
+                <p class="muted">They are added to this album for everyone with the link. Photos and videos only,
+                  up to 2 GB each.</p>
+              } @else {
+                <p class="muted">The owner has switched off adding files to this album.</p>
+              }
               @if (uploadSummary(); as sum) {
                 <ion-text [color]="sum.failed > 0 ? 'warning' : 'success'"><p role="status">{{ sum.text }}</p></ion-text>
               }
@@ -80,7 +86,9 @@ const KIND_LABEL: Record<string, string> = {
                   <span>{{ u.name }}</span>
                   @if (u.error) {
                     <ion-text color="danger"><span role="alert">{{ u.error }}</span></ion-text>
-                    <ion-button size="small" fill="outline" (click)="retry(u)">Try again</ion-button>
+                    @if (l.uploadsAllowed) {
+                      <ion-button size="small" fill="outline" (click)="retry(u)">Try again</ion-button>
+                    }
                   } @else if (u.done) {
                     <ion-text color="success"><span>✓ Added · {{ bytes(u.size) }}</span></ion-text>
                   } @else {
@@ -286,7 +294,7 @@ export class SharePage implements OnInit {
   private async send(u: VisitorUpload): Promise<void> {
     this.update(u.id, { error: undefined, done: false, percent: 0, phase: 'queued' });
     const task = new UploadTask(this.visitorApi, `share:${this.token}`, u.file,
-      (p) => this.update(u.id, { percent: p.percent, phase: p.phase }));
+      (p) => this.update(u.id, { percent: p.percent, phase: p.phase }), { alwaysParts: true });
     try {
       await task.start();
       this.update(u.id, { done: true, percent: 100 });
@@ -297,12 +305,18 @@ export class SharePage implements OnInit {
     }
   }
 
-  /** Shows the new files: the album and its first page again. */
-  private refreshItems(): void {
+  /**
+   * Shows the new files: the album and its first page again, now and once more shortly after, since a
+   * finished file is shown once its checksum is verified (a few seconds).
+   */
+  private refreshItems(again = true): void {
     this.api.sharedLink(this.token).subscribe({ next: (l) => this.link.set(l), error: () => undefined });
     this.items.set([]);
     this.cursor.set(null);
     this.loadMore();
+    if (again) {
+      setTimeout(() => this.refreshItems(false), 8000);
+    }
   }
 
   protected thumbUrl(item: SharedItem): string {

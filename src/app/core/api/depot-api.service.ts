@@ -388,16 +388,8 @@ export class DepotApi {
   visitorUploads(token: string): DepotApi {
     const base = `/v1/share/${encodeURIComponent(token)}`;
     return {
-      uploadSimple: (_namespace: string, file: File, sha256?: string) => {
-        const params = new HttpParams().set('filename', file.name);
-        let headers = new HttpHeaders({ 'Content-Type': file.type || 'application/octet-stream' });
-        if (sha256) {
-          headers = headers.set('X-Depot-Sha256', sha256);
-        }
-        return this.http.put<Envelope<ObjectResult>>(this.url(`${base}/objects`), file, {
-          params, headers, observe: 'events', reportProgress: true,
-        }).pipe(catchError((e) => throwError(() => ApiError.from(e))));
-      },
+      // Visitors always send in parts (UploadTask alwaysParts); there is no single-request path for them.
+      uploadSimple: () => throwError(() => new ApiError(0, 'NOT_FOUND', 'Visitors send files in parts')),
       createUpload: (body: CreateUpload, idempotencyKey: string) => this.send<Upload>('POST', `${base}/uploads`,
         { filename: body.filename, contentType: body.contentType, size: body.size, sha256: body.sha256 },
         { 'Idempotency-Key': idempotencyKey }),

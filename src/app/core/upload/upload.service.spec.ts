@@ -539,3 +539,46 @@ describe('A reply lost after the file was stored', () => {
     await expect(task.start({ storedSince: Date.now() - 60_000 })).resolves.toMatchObject({ objectId: 'new' });
   });
 });
+
+describe('Visitor uploads on a shared album', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('a small photo still goes in parts straight to storage (alwaysParts)', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+    FakeXhr.all = [];
+    let simple = 0;
+    let created = 0;
+    const api = {
+      uploadSimple: () => { simple++; return throwError(() => new Error('no')); },
+      createUpload: () => { created++; return of({ uploadId: 'v1', partSize: PART, partCount: 1 }); },
+      partTarget: (_id: string, n: number) => of({ partNumber: n, request: { url: `vpart-${n}`, method: 'PUT', headers: {} } }),
+      uploadStatus: () => of({ received: [], missing: [1] }),
+      completeUpload: () => of({ objectId: 'vo', status: 'VERIFYING' }),
+      abortUpload: () => of(undefined),
+    } as unknown as DepotApi;
+    const task = new UploadTask(api, 'share:t', new File([new Uint8Array(2000)], 'IMG_1.jpg'), () => undefined,
+      { alwaysParts: true });
+    expect(task.pausable).toBe(true);
+    const result = task.start();
+    await until(() => FakeXhr.all.length === 1, 'the one part on the wire');
+    FakeXhr.all[0].finish();
+    await expect(result).resolves.toMatchObject({ objectId: 'vo' });
+    expect(simple).toBe(0);
+    expect(created).toBe(1);
+  });
+
+  it('"come back tomorrow" is shown straight away, not retried', async () => {
+    let created = 0;
+    const daily = new HttpErrorResponse({ status: 429, error: { data: null, message: 'x',
+      errors: [{ code: 3205, message: 'Daily limit', reason: 'DAILY_LIMIT_REACHED' }] } });
+    const api = {
+      createUpload: () => { created++; return throwError(() => daily); },
+      abortUpload: () => of(undefined),
+    } as unknown as DepotApi;
+    const task = new UploadTask(api, 'share:t', new File([new Uint8Array(10)], 'a.jpg'), () => undefined,
+      { alwaysParts: true });
+    const reason = await task.start().then(() => null, (e: unknown) => ApiError.from(e).reason);
+    expect(reason).toBe('DAILY_LIMIT_REACHED');
+    expect(created).toBe(1);
+  });
+});

@@ -1,4 +1,4 @@
-import { HttpEventType, provideHttpClient } from '@angular/common/http';
+import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { firstValueFrom, lastValueFrom } from 'rxjs';
@@ -27,20 +27,14 @@ describe('DepotApi.visitorUploads: the owner-shaped upload calls of a share link
 
   afterEach(() => http.verify());
 
-  it('sends a photo to the link, never to a folder of the owner', async () => {
-    const v = api.visitorUploads('tok/en');
-    const events = lastValueFrom(v.uploadSimple('ignored', new File([new Uint8Array(3)], 'IMG 1.jpg', { type: 'image/jpeg' }), 'abc'));
-    const req = http.expectOne((r) => r.url === '/depot/v1/share/tok%2Fen/objects');
-    expect(req.request.method).toBe('PUT');
-    expect(req.request.params.get('filename')).toBe('IMG 1.jpg');
-    expect(req.request.params.has('namespace')).toBe(false);
-    expect(req.request.headers.get('X-Depot-Sha256')).toBe('abc');
-    req.flush(ok({ objectId: 'o1' }));
-    const last = await events;
-    expect(last.type).toBe(HttpEventType.Response);
+  it('has no single-request path: visitors always send in parts', async () => {
+    const v = api.visitorUploads('t1');
+    await expect(lastValueFrom(v.uploadSimple('default', new File([new Uint8Array(3)], 'a.jpg'))))
+      .rejects.toBeTruthy();
+    http.expectNone(() => true);
   });
 
-  it('starts, sends, checks and finishes a large file through the link', async () => {
+  it('starts, sends, checks and finishes a file through the link', async () => {
     const v = api.visitorUploads('t1');
     const created = firstValueFrom(v.createUpload({ namespace: 'default', filename: 'ride.mov',
       contentType: 'video/quicktime', size: 99 } as CreateUpload, 'key-1'));

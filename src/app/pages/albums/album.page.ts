@@ -394,11 +394,26 @@ export class AlbumPage implements OnInit {
     if (!a || a.visitorUploads === on) {
       return;
     }
-    this.run(() => this.api.updateAlbum(this.id, { visitorUploads: on }), (updated) => {
-      this.album.set(updated);
-      this.message.set(on
-        ? 'People with this album\'s links can now add photos and videos.'
-        : 'Adding files through links is switched off.');
+    this.busy.set(true);
+    this.problem.set(null);
+    this.message.set(null);
+    this.api.updateAlbum(this.id, { visitorUploads: on }).subscribe({
+      next: (updated) => {
+        this.busy.set(false);
+        this.album.set(updated);
+        if (updated.visitorUploads !== on) {
+          this.problem.set('This change is not available yet. Try again later.');
+        } else {
+          this.message.set(on
+            ? 'People with this album\'s links can now add photos and videos.'
+            : 'Adding files through links is switched off, and unfinished ones were stopped.');
+        }
+      },
+      error: (e: ApiError) => {
+        this.busy.set(false);
+        this.album.set({ ...a });                       // the switch shows what the server has again
+        this.problem.set(describeError(e, PROBLEMS));
+      },
     });
   }
 

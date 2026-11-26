@@ -241,13 +241,18 @@ export class UploadTask {
   private leaveQueue: (() => void) | null = null;
   private readonly key: string;
 
+  /**
+   * `alwaysParts`: send even small files in parts straight to storage (visitors on a shared album: the
+   * service never carries their bytes, and each file is checked again when it is finished).
+   */
   constructor(
     private readonly api: DepotApi,
     private readonly namespace: string,
     readonly file: File,
     private readonly onProgress: ProgressFn,
+    options: { alwaysParts?: boolean } = {},
   ) {
-    this.pausable = file.size > RESUMABLE_FROM;
+    this.pausable = options.alwaysParts === true || file.size > RESUMABLE_FROM;
     this.key = sessionKey(namespace, file);
   }
 

@@ -626,30 +626,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/share/{token}/objects": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * A visitor adds a photo or video (up to 64 MiB) to a shared album
-         * @description No sign-in: the share link is the credential. Only while the album allows visitors to add files
-         *     (`uploadsAllowed`), otherwise `403 INSUFFICIENT_SCOPE`. Photos and videos only (`415
-         *     CONTENT_TYPE_NOT_ALLOWED`); up to 2 GB per file; an album takes a limited number of visitor files
-         *     per day (`429 RATE_LIMITED`). The file goes into the album's upload folder, counts against the
-         *     owner's storage and is added to the album. Larger files use `/v1/share/{token}/uploads`.
-         */
-        put: operations["visitorUploadObject"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/share/{token}/uploads": {
         parameters: {
             query?: never;
@@ -660,8 +636,16 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * A visitor starts a large upload to a shared album
-         * @description Same rules as `PUT /v1/share/{token}/objects`; the parts go straight to storage.
+         * A visitor starts adding a photo or video to a shared album
+         * @description No sign-in: the share link is the credential. Every file, however small, goes in parts straight to
+         *     storage (`/parts/{n}`, then `/complete`). Only while the album allows visitors to add files
+         *     (`uploadsAllowed`), otherwise `403 INSUFFICIENT_SCOPE`. Photos and videos only (`415
+         *     CONTENT_TYPE_NOT_ALLOWED`; the finished file's first bytes are checked too), up to 2 GB per file
+         *     (`413`). Per album: a number of finished visitor files per day (`429 DAILY_LIMIT_REACHED`, not worth
+         *     retrying today) and a few unfinished uploads at once (`429 RATE_LIMITED`, retry in a few minutes).
+         *     Refused when the owner's storage is nearly full (`413 QUOTA_STORAGE_EXCEEDED`). Files go into the
+         *     album's upload folder and count against the owner's storage. Unfinished uploads expire after a few
+         *     hours, and end at once when adding is switched off or the link is stopped.
          */
         post: operations["visitorCreateUpload"];
         delete?: never;
@@ -716,8 +700,9 @@ export interface paths {
         put?: never;
         /**
          * A visitor finishes a large upload; the file is added to the album
-         * @description If adding files was switched off (or the link stopped working) meanwhile, this answers 403 and the
-         *     upload is stopped, releasing its reserved storage.
+         * @description If adding files was switched off (or the link stopped working) meanwhile, this answers 403 (or 404)
+         *     and the upload is stopped, releasing its reserved storage. A file that is not really a photo or video
+         *     is removed (`415`). Safe to repeat after a lost reply.
          */
         post: operations["visitorCompleteUpload"];
         delete?: never;
@@ -1842,6 +1827,7 @@ export interface components {
          *     | QUOTA_EGRESS_EXCEEDED | 3202 | 429 | yes |
          *     | OBJECT_TOO_LARGE | 3203 | 413 | no |
          *     | RATE_LIMITED | 3204 | 429 | yes |
+         *     | DAILY_LIMIT_REACHED | 3205 | 429 | no |
          *     | UPLOAD_NOT_FOUND | 3301 | 404 | no |
          *     | UPLOAD_EXPIRED | 3302 | 410 | no |
          *     | UPLOAD_INCOMPLETE | 3304 | 409 | yes |
@@ -1874,7 +1860,7 @@ export interface components {
          *     | INTERNAL_ERROR | 500 | 500 | no |
          * @enum {string}
          */
-        ErrorReason: "VALIDATION_ERROR" | "MALFORMED_REQUEST" | "SLUG_TAKEN" | "IDEMPOTENCY_KEY_REUSED" | "NAMESPACE_EXISTS" | "NAMESPACE_PROTECTED" | "NAMESPACE_NOT_EMPTY" | "CREDENTIAL_INVALID" | "INSUFFICIENT_SCOPE" | "INSUFFICIENT_ROLE" | "TENANT_SUSPENDED" | "EMAIL_NOT_VERIFIED" | "RESOURCE_NOT_FOUND" | "TENANT_SELECTION_REQUIRED" | "TENANT_NOT_RESOLVED" | "TENANT_NOT_A_MEMBER" | "NAMESPACE_NOT_FOUND" | "QUOTA_STORAGE_EXCEEDED" | "QUOTA_EGRESS_EXCEEDED" | "OBJECT_TOO_LARGE" | "RATE_LIMITED" | "UPLOAD_NOT_FOUND" | "UPLOAD_EXPIRED" | "UPLOAD_INCOMPLETE" | "UPLOAD_CHECKSUM_MISMATCH" | "UPLOAD_SIZE_MISMATCH" | "PART_CHECKSUM_MISMATCH" | "CONTENT_TYPE_NOT_ALLOWED" | "OBJECT_UPLOADING" | "OBJECT_VERIFYING" | "OBJECT_PROCESSING" | "OBJECT_CORRUPT" | "OBJECT_DELETED" | "VERSION_NOT_FOUND" | "PRECONDITION_FAILED" | "OBJECT_MISSING" | "STORAGE_UNAVAILABLE" | "DATABASE_UNAVAILABLE" | "TIER_NOT_ALLOWED" | "IDENTITY_UNAVAILABLE" | "PASSIVE_SLOT_RESTRICTED" | "JOB_NOT_FOUND" | "SEARCH_UNAVAILABLE" | "WEBHOOK_URL_NOT_ALLOWED" | "NOT_FOUND" | "METHOD_NOT_ALLOWED" | "NOT_ACCEPTABLE" | "PAYLOAD_TOO_LARGE" | "UNSUPPORTED_MEDIA_TYPE" | "RANGE_NOT_SATISFIABLE" | "INTERNAL_ERROR";
+        ErrorReason: "VALIDATION_ERROR" | "MALFORMED_REQUEST" | "SLUG_TAKEN" | "IDEMPOTENCY_KEY_REUSED" | "NAMESPACE_EXISTS" | "NAMESPACE_PROTECTED" | "NAMESPACE_NOT_EMPTY" | "CREDENTIAL_INVALID" | "INSUFFICIENT_SCOPE" | "INSUFFICIENT_ROLE" | "TENANT_SUSPENDED" | "EMAIL_NOT_VERIFIED" | "RESOURCE_NOT_FOUND" | "TENANT_SELECTION_REQUIRED" | "TENANT_NOT_RESOLVED" | "TENANT_NOT_A_MEMBER" | "NAMESPACE_NOT_FOUND" | "QUOTA_STORAGE_EXCEEDED" | "QUOTA_EGRESS_EXCEEDED" | "OBJECT_TOO_LARGE" | "RATE_LIMITED" | "DAILY_LIMIT_REACHED" | "UPLOAD_NOT_FOUND" | "UPLOAD_EXPIRED" | "UPLOAD_INCOMPLETE" | "UPLOAD_CHECKSUM_MISMATCH" | "UPLOAD_SIZE_MISMATCH" | "PART_CHECKSUM_MISMATCH" | "CONTENT_TYPE_NOT_ALLOWED" | "OBJECT_UPLOADING" | "OBJECT_VERIFYING" | "OBJECT_PROCESSING" | "OBJECT_CORRUPT" | "OBJECT_DELETED" | "VERSION_NOT_FOUND" | "PRECONDITION_FAILED" | "OBJECT_MISSING" | "STORAGE_UNAVAILABLE" | "DATABASE_UNAVAILABLE" | "TIER_NOT_ALLOWED" | "IDENTITY_UNAVAILABLE" | "PASSIVE_SLOT_RESTRICTED" | "JOB_NOT_FOUND" | "SEARCH_UNAVAILABLE" | "WEBHOOK_URL_NOT_ALLOWED" | "NOT_FOUND" | "METHOD_NOT_ALLOWED" | "NOT_ACCEPTABLE" | "PAYLOAD_TOO_LARGE" | "UNSUPPORTED_MEDIA_TYPE" | "RANGE_NOT_SATISFIABLE" | "INTERNAL_ERROR";
         /** @example acme */
         TenantSlug: string;
         /** @example photos */
@@ -4509,41 +4495,6 @@ export interface operations {
             };
         };
     };
-    visitorUploadObject: {
-        parameters: {
-            query: {
-                filename: string;
-            };
-            header?: {
-                "X-Depot-Sha256"?: components["schemas"]["Sha256Hex"];
-            };
-            path: {
-                token: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/octet-stream": string;
-            };
-        };
-        responses: {
-            /** @description Stored and added to the album. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObjectResultResponse"];
-                };
-            };
-            400: components["responses"]["ValidationError"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            415: components["responses"]["UnsupportedMediaType"];
-            429: components["responses"]["TooManyRequests"];
-        };
-    };
     visitorCreateUpload: {
         parameters: {
             query?: never;
@@ -4571,6 +4522,7 @@ export interface operations {
             400: components["responses"]["ValidationError"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             429: components["responses"]["TooManyRequests"];
         };
@@ -4680,6 +4632,7 @@ export interface operations {
             400: components["responses"]["ValidationError"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            415: components["responses"]["UnsupportedMediaType"];
         };
     };
     listSharedAlbumItems: {

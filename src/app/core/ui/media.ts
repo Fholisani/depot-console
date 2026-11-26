@@ -3,7 +3,9 @@ export type MediaKind = 'image' | 'video' | 'audio' | 'pdf' | 'other';
 
 const BY_EXTENSION: Record<string, MediaKind> = {
   jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', bmp: 'image', webp: 'image', avif: 'image', heic: 'image',
+  heif: 'image', jfif: 'image', tif: 'image', tiff: 'image', dng: 'image',
   mp4: 'video', m4v: 'video', mov: 'video', webm: 'video', mkv: 'video', lrf: 'video',
+  '3gp': 'video', avi: 'video', mts: 'video', m2ts: 'video',
   mp3: 'audio', m4a: 'audio', wav: 'audio', ogg: 'audio',
   pdf: 'pdf',
 };
