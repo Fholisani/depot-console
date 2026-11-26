@@ -1,6 +1,6 @@
 import { HttpClient, HttpEvent, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable, catchError, map, retry, throwError, timer } from 'rxjs';
+import { Observable, catchError, map, of, retry, throwError, timer } from 'rxjs';
 import { APP_CONFIG } from '../config/app-config';
 import { ApiError } from './api-error';
 import type {
@@ -379,6 +379,38 @@ export class DepotApi {
     return this.http.put<Envelope<ObjectResult>>(this.url('/v1/objects'), file, {
       params, headers, observe: 'events', reportProgress: true,
     }).pipe(catchError((e) => throwError(() => ApiError.from(e))));
+  }
+
+  /**
+   * The upload calls of a shared album's link, shaped like this service's own, so the same upload code
+   * (queue, parts, resume, retries) sends a visitor's files. Works while the album lets visitors add files.
+   */
+  visitorUploads(token: string): DepotApi {
+    const base = `/v1/share/${encodeURIComponent(token)}`;
+    return {
+      uploadSimple: (_namespace: string, file: File, sha256?: string) => {
+        const params = new HttpParams().set('filename', file.name);
+        let headers = new HttpHeaders({ 'Content-Type': file.type || 'application/octet-stream' });
+        if (sha256) {
+          headers = headers.set('X-Depot-Sha256', sha256);
+        }
+        return this.http.put<Envelope<ObjectResult>>(this.url(`${base}/objects`), file, {
+          params, headers, observe: 'events', reportProgress: true,
+        }).pipe(catchError((e) => throwError(() => ApiError.from(e))));
+      },
+      createUpload: (body: CreateUpload, idempotencyKey: string) => this.send<Upload>('POST', `${base}/uploads`,
+        { filename: body.filename, contentType: body.contentType, size: body.size, sha256: body.sha256 },
+        { 'Idempotency-Key': idempotencyKey }),
+      uploadStatus: (id: string) => this.get<UploadStatus>(`${base}/uploads/${id}`),
+      partTarget: (id: string, partNumber: number, sha256Base64: string) =>
+        this.send<PartTarget>('POST', `${base}/uploads/${id}/parts/${partNumber}`, { sha256: sha256Base64 }),
+      completeUpload: (id: string, body: CompleteUpload) =>
+        this.send<ObjectResult>('POST', `${base}/uploads/${id}/complete`, body),
+      abortUpload: (id: string) => this.send<void>('DELETE', `${base}/uploads/${id}`),
+      // A visitor cannot look into the owner's folders; a lost reply is simply sent again.
+      duplicates: () => of({ duplicates: [] }),
+      object: () => throwError(() => new ApiError(404, 'RESOURCE_NOT_FOUND', 'Not available to visitors')),
+    } as unknown as DepotApi;
   }
 
   createUpload(body: CreateUpload, idempotencyKey: string): Observable<Upload> {

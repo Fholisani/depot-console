@@ -19,7 +19,7 @@ export interface TileFile {
 }
 
 /** Album marks on a tile: in an album, or in a shared album. */
-export type TileMark = 'album' | 'shared' | 'cover' | null;
+export type TileMark = 'album' | 'shared' | 'cover' | 'visitor' | null;
 
 /**
  * One file in a gallery: a preview picture for photos and videos with a poster (videos also show their
@@ -47,6 +47,8 @@ export type TileMark = 'album' | 'shared' | 'cover' | null;
         @if (mark(); as m) {
           @if (m === 'cover') {
             <span class="mark cover" title="The album's cover, used in link previews">Cover</span>
+          } @else if (m === 'visitor') {
+            <span class="mark visitor" title="Added by a visitor through a share link">Visitor</span>
           } @else {
             <span class="mark" [class.shared]="m === 'shared'" [attr.title]="m === 'shared' ? 'In a shared album' : 'In an album'">
               {{ m === 'shared' ? '🔗' : '★' }}
@@ -80,6 +82,7 @@ export type TileMark = 'album' | 'shared' | 'cover' | null;
       border-radius: 999px; font-size: 0.8rem; padding: 0.1rem 0.4rem; }
     .mark.shared { color: #fff; }
     .mark.cover { color: #fff; background: var(--ion-color-primary); font-size: 0.7rem; font-weight: 600; }
+    .mark.visitor { color: #fff; background: #2e7d32; font-size: 0.7rem; font-weight: 600; }
     .cap { padding: 0.4rem 0.6rem; display: grid; }
     .name { font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .size { font-size: 0.75rem; color: var(--ion-color-medium); }

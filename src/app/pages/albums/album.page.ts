@@ -5,7 +5,7 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { firstValueFrom, type Observable } from 'rxjs';
 import {
   IonButton, IonCard, IonCardContent, IonCardHeader, IonCardTitle, IonInput, IonNote, IonProgressBar,
-  IonSelect, IonSelectOption, IonSpinner, IonText,
+  IonSelect, IonSelectOption, IonSpinner, IonText, IonToggle,
 } from '@ionic/angular';
 import { ApiError } from '../../core/api/api-error';
 import { DepotApi } from '../../core/api/depot-api.service';
@@ -52,12 +52,13 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
   selector: 'app-album',
   imports: [
     DatePipe, FileTile, FormsModule, MediaViewer, RouterLink, IonButton, IonCard, IonCardContent, IonCardHeader,
-    IonCardTitle, IonInput, IonNote, IonProgressBar, IonSelect, IonSelectOption, IonSpinner, IonText,
+    IonCardTitle, IonInput, IonNote, IonProgressBar, IonSelect, IonSelectOption, IonSpinner, IonText, IonToggle,
   ],
   template: `
     <p><a routerLink="/app/albums">&larr; Albums</a></p>
     @if (album(); as a) {
-      <h1>{{ a.name }} @if (a.shared) { <span class="badge">🔗 Shared</span> }</h1>
+      <h1>{{ a.name }} @if (a.shared) { <span class="badge">🔗 Shared</span> }
+        @if (a.visitorUploads) { <span class="badge visitors">⬆ Visitors can upload</span> }</h1>
       @if (a.description) { <p class="desc">{{ a.description }}</p> }
       <p class="muted">{{ a.itemCount }} {{ a.itemCount === 1 ? 'item' : 'items' }} · {{ bytes(a.totalSize) }}</p>
       @if (message()) { <ion-text color="success"><p role="status">{{ message() }}</p></ion-text> }
@@ -141,7 +142,8 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
       <div class="grid">
         @for (item of items(); track item.objectId; let i = $index) {
           <app-file-tile [file]="item" [selecting]="selecting()" [selected]="selected().has(item.objectId)"
-            [mark]="item.objectId === a.coverObjectId ? 'cover' : null" (activate)="onActivate(item, i)" />
+            [mark]="item.objectId === a.coverObjectId ? 'cover' : (item.addedByVisitor ? 'visitor' : null)"
+            (activate)="onActivate(item, i)" />
         }
       </div>
       @if (loadingItems()) {
@@ -154,6 +156,17 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
         <ion-card>
           <ion-card-header><ion-card-title>Share</ion-card-title></ion-card-header>
           <ion-card-content>
+            <ion-toggle [checked]="a.visitorUploads" (ionChange)="setVisitorUploads($any($event).detail.checked)"
+              [disabled]="busy()" justify="space-between">Let people with the link add photos and videos</ion-toggle>
+            <p class="muted">
+              @if (a.visitorUploads) {
+                On: anyone with one of this album's links can add photos and videos (up to 2 GB each, 300 a day).
+                They go into this album, count against your storage and show as from a visitor. Switch it off
+                at any time; it applies straight away.
+              } @else {
+                Off: people with the link can only look and download.
+              }
+            </p>
             <p class="muted">
               Anyone with the link can see this album and view or download its files, no account needed.
               Files you add later appear on the same link; files you remove stop working.
@@ -227,6 +240,8 @@ const PROBLEMS: Partial<Record<ApiError['reason'], string>> = {
   styles: [`
     .muted { color: var(--ion-color-medium); }
     .desc { white-space: pre-wrap; }
+    .badge.visitors { background: #e3f2e1; color: #1b5e20; }
+    ion-toggle { width: 100%; margin-bottom: 0.25rem; }
     .badge { font-size: 0.8rem; vertical-align: middle; background: var(--ion-color-light-shade); border-radius: 999px;
       padding: 0.15rem 0.55rem; font-weight: normal; }
     .actions { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; margin: 0.5rem 0; }
@@ -372,6 +387,19 @@ export class AlbumPage implements OnInit {
   protected makeCover(): void {
     const [cover] = [...this.selected()];
     this.setCover(cover);
+  }
+
+  protected setVisitorUploads(on: boolean): void {
+    const a = this.album();
+    if (!a || a.visitorUploads === on) {
+      return;
+    }
+    this.run(() => this.api.updateAlbum(this.id, { visitorUploads: on }), (updated) => {
+      this.album.set(updated);
+      this.message.set(on
+        ? 'People with this album\'s links can now add photos and videos.'
+        : 'Adding files through links is switched off.');
+    });
   }
 
   protected chooseCover(): void {

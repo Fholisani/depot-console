@@ -41,6 +41,7 @@ import { AlbumCover } from './album-cover';
             </div>
             <div class="cap">
               <strong>{{ a.name }}</strong>
+              @if (a.visitorUploads) { <span class="visitors">⬆ Visitors can upload</span> }
               <span>{{ a.itemCount }} {{ a.itemCount === 1 ? 'item' : 'items' }} · {{ bytes(a.totalSize) }}</span>
             </div>
           </a>
@@ -55,6 +56,8 @@ import { AlbumCover } from './album-cover';
     .card { display: block; text-decoration: none; color: inherit; border-radius: 14px; overflow: hidden;
       border: 1px solid var(--ion-color-light-shade); background: var(--ion-color-light); }
     .cover { position: relative; aspect-ratio: 1; display: grid; place-items: center; background: var(--ion-color-light-shade); }
+    .visitors { font-size: 0.75rem; color: #1b5e20; background: #e3f2e1; border-radius: 999px;
+      padding: 0.05rem 0.45rem; justify-self: start; }
     .shared { position: absolute; top: 0.5rem; right: 0.5rem; background: rgba(0,0,0,0.6); color: #fff;
       font-size: 0.75rem; border-radius: 999px; padding: 0.15rem 0.5rem; }
     .cap { display: grid; padding: 0.5rem 0.7rem; gap: 0.1rem; }

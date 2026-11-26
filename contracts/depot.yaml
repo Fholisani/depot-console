@@ -1035,6 +1035,179 @@ paths:
           content:
             text/html:
               schema: { type: string }
+  /v1/share/{token}/objects:
+    put:
+      tags: [Sharing]
+      operationId: visitorUploadObject
+      summary: A visitor adds a photo or video (up to 64 MiB) to a shared album
+      description: |
+        No sign-in: the share link is the credential. Only while the album allows visitors to add files
+        (`uploadsAllowed`), otherwise `403 INSUFFICIENT_SCOPE`. Photos and videos only (`415
+        CONTENT_TYPE_NOT_ALLOWED`); up to 2 GB per file; an album takes a limited number of visitor files
+        per day (`429 RATE_LIMITED`). The file goes into the album's upload folder, counts against the
+        owner's storage and is added to the album. Larger files use `/v1/share/{token}/uploads`.
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+        - name: filename
+          in: query
+          required: true
+          schema: { type: string }
+        - name: X-Depot-Sha256
+          in: header
+          required: false
+          schema: { $ref: '#/components/schemas/Sha256Hex' }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '201':
+          description: Stored and added to the album.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ObjectResultResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /v1/share/{token}/uploads:
+    post:
+      tags: [Sharing]
+      operationId: visitorCreateUpload
+      summary: A visitor starts a large upload to a shared album
+      description: Same rules as `PUT /v1/share/{token}/objects`; the parts go straight to storage.
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VisitorUpload' }
+      responses:
+        '201':
+          description: The upload, with its part size and count.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /v1/share/{token}/uploads/{id}:
+    get:
+      tags: [Sharing]
+      operationId: visitorUploadStatus
+      summary: Which parts of a visitor's upload storage has (to resume)
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Received and missing parts.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadStatusResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Sharing]
+      operationId: visitorAbortUpload
+      summary: A visitor stops their upload
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Stopped; the reserved storage is released. }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/share/{token}/uploads/{id}/parts/{partNumber}:
+    post:
+      tags: [Sharing]
+      operationId: visitorPartTarget
+      summary: A signed request for one part of a visitor's upload
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: partNumber
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PartRequest' }
+      responses:
+        '200':
+          description: Where to send the part.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PartTargetResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/share/{token}/uploads/{id}/complete:
+    post:
+      tags: [Sharing]
+      operationId: visitorCompleteUpload
+      summary: A visitor finishes a large upload; the file is added to the album
+      description: |
+        If adding files was switched off (or the link stopped working) meanwhile, this answers 403 and the
+        upload is stopped, releasing its reserved storage.
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompleteUpload' }
+      responses:
+        '200':
+          description: Stored and added to the album.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ObjectResultResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /v1/share/{token}/items:
     get:
       tags: [Sharing]
@@ -3669,7 +3842,7 @@ components:
         downloads: { type: integer, format: int64 }
     SharedLink:
       type: object
-      required: [target, name, size, sharedAt, thumbnail]
+      required: [target, name, size, sharedAt, thumbnail, uploadsAllowed]
       properties:
         target: { type: string, enum: [file, album] }
         name: { type: string, description: The file name or the album name. }
@@ -3686,6 +3859,9 @@ components:
         thumbnail:
           type: boolean
           description: True if `/thumbnail` exists for the link (and, for file links, `/preview`).
+        uploadsAllowed:
+          type: boolean
+          description: Album links only. True when visitors may add photos and videos to the album now.
     SharedItem:
       type: object
       required: [objectId, filename, contentType, kind, size, thumbnail]
@@ -3713,7 +3889,7 @@ components:
     # -------------------------------------------------------------- albums
     Album:
       type: object
-      required: [id, name, itemCount, totalSize, shared, createdAt, updatedAt]
+      required: [id, name, itemCount, totalSize, shared, createdAt, updatedAt, visitorUploads]
       properties:
         id: { type: string, format: uuid }
         name: { type: string, minLength: 1, maxLength: 120 }
@@ -3725,9 +3901,13 @@ components:
         shared: { type: boolean, description: True while the album has an active share link. }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+        visitorUploads:
+          type: boolean
+          description: True when people with one of the album's share links may add photos and videos.
     AlbumItem:
       type: object
-      required: [objectId, namespace, filename, contentType, kind, size, status, thumbnail, addedAt, createdAt]
+      required: [objectId, namespace, filename, contentType, kind, size, status, thumbnail, addedAt, createdAt,
+                 addedByVisitor]
       properties:
         objectId: { type: string, format: uuid }
         namespace: { type: string }
@@ -3747,6 +3927,9 @@ components:
           type: [string, 'null']
           format: date-time
           description: When a video was recorded (from its metadata), when known; null otherwise.
+        addedByVisitor:
+          type: boolean
+          description: True if a visitor added the file through one of the album's share links.
     AlbumItemPage:
       type: object
       required: [items]
@@ -3760,6 +3943,14 @@ components:
         name: { type: string, minLength: 1, maxLength: 120 }
         description: { type: [string, 'null'], maxLength: 280 }
         objectIds: { type: array, maxItems: 500, items: { type: string, format: uuid } }
+    VisitorUpload:
+      type: object
+      required: [filename, size]
+      properties:
+        filename: { type: string, minLength: 1, maxLength: 1024 }
+        contentType: { type: [string, 'null'], examples: [video/quicktime] }
+        size: { type: integer, format: int64, minimum: 0, maximum: 2147483648 }
+        sha256: { $ref: '#/components/schemas/Sha256Hex' }
     UpdateAlbum:
       type: object
       properties:
@@ -3768,6 +3959,9 @@ components:
         coverObjectId: { type: [string, 'null'], format: uuid }
         clearCover: { type: [boolean, 'null'] }
         uploadNamespace: { type: [string, 'null'] }
+        visitorUploads:
+          type: [boolean, 'null']
+          description: Lets visitors with the album's share links add photos and videos (true) or stops it (false).
     ObjectIds:
       type: object
       required: [objectIds]

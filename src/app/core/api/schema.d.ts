@@ -626,6 +626,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/share/{token}/objects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * A visitor adds a photo or video (up to 64 MiB) to a shared album
+         * @description No sign-in: the share link is the credential. Only while the album allows visitors to add files
+         *     (`uploadsAllowed`), otherwise `403 INSUFFICIENT_SCOPE`. Photos and videos only (`415
+         *     CONTENT_TYPE_NOT_ALLOWED`); up to 2 GB per file; an album takes a limited number of visitor files
+         *     per day (`429 RATE_LIMITED`). The file goes into the album's upload folder, counts against the
+         *     owner's storage and is added to the album. Larger files use `/v1/share/{token}/uploads`.
+         */
+        put: operations["visitorUploadObject"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/share/{token}/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A visitor starts a large upload to a shared album
+         * @description Same rules as `PUT /v1/share/{token}/objects`; the parts go straight to storage.
+         */
+        post: operations["visitorCreateUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/share/{token}/uploads/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Which parts of a visitor's upload storage has (to resume) */
+        get: operations["visitorUploadStatus"];
+        put?: never;
+        post?: never;
+        /** A visitor stops their upload */
+        delete: operations["visitorAbortUpload"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/share/{token}/uploads/{id}/parts/{partNumber}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A signed request for one part of a visitor's upload */
+        post: operations["visitorPartTarget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/share/{token}/uploads/{id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A visitor finishes a large upload; the file is added to the album
+         * @description If adding files was switched off (or the link stopped working) meanwhile, this answers 403 and the
+         *     upload is stopped, releasing its reserved storage.
+         */
+        post: operations["visitorCompleteUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/share/{token}/items": {
         parameters: {
             query?: never;
@@ -2625,6 +2725,8 @@ export interface components {
             coverObjectId?: string | null;
             /** @description True if `/thumbnail` exists for the link (and, for file links, `/preview`). */
             thumbnail: boolean;
+            /** @description Album links only. True when visitors may add photos and videos to the album now. */
+            uploadsAllowed: boolean;
         };
         SharedItem: {
             /** Format: uuid */
@@ -2674,6 +2776,8 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+            /** @description True when people with one of the album's share links may add photos and videos. */
+            visitorUploads: boolean;
         };
         AlbumItem: {
             /** Format: uuid */
@@ -2704,6 +2808,8 @@ export interface components {
              * @description When a video was recorded (from its metadata), when known; null otherwise.
              */
             recordedAt?: string | null;
+            /** @description True if a visitor added the file through one of the album's share links. */
+            addedByVisitor: boolean;
         };
         AlbumItemPage: {
             items: components["schemas"]["AlbumItem"][];
@@ -2714,6 +2820,14 @@ export interface components {
             description?: string | null;
             objectIds?: string[];
         };
+        VisitorUpload: {
+            filename: string;
+            /** @example video/quicktime */
+            contentType?: string | null;
+            /** Format: int64 */
+            size: number;
+            sha256?: components["schemas"]["Sha256Hex"];
+        };
         UpdateAlbum: {
             name?: string | null;
             description?: string | null;
@@ -2721,6 +2835,8 @@ export interface components {
             coverObjectId?: string | null;
             clearCover?: boolean | null;
             uploadNamespace?: string | null;
+            /** @description Lets visitors with the album's share links add photos and videos (true) or stops it (false). */
+            visitorUploads?: boolean | null;
         };
         ObjectIds: {
             objectIds: string[];
@@ -4391,6 +4507,179 @@ export interface operations {
                     "text/html": string;
                 };
             };
+        };
+    };
+    visitorUploadObject: {
+        parameters: {
+            query: {
+                filename: string;
+            };
+            header?: {
+                "X-Depot-Sha256"?: components["schemas"]["Sha256Hex"];
+            };
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Stored and added to the album. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObjectResultResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    visitorCreateUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VisitorUpload"];
+            };
+        };
+        responses: {
+            /** @description The upload, with its part size and count. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    visitorUploadStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Received and missing parts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadStatusResponse"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    visitorAbortUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stopped; the reserved storage is released. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    visitorPartTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+                id: string;
+                partNumber: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PartRequest"];
+            };
+        };
+        responses: {
+            /** @description Where to send the part. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PartTargetResponse"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    visitorCompleteUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CompleteUpload"];
+            };
+        };
+        responses: {
+            /** @description Stored and added to the album. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObjectResultResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listSharedAlbumItems: {
