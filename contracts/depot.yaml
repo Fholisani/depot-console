@@ -112,6 +112,8 @@ tags:
     description: Links that let anyone view and download one file or one album without signing in.
   - name: Public
     description: Unauthenticated reads from namespaces marked public.
+  - name: Billing
+    description: Plans customers can choose, plan requests, and payment provider notifications.
   - name: Operator
     description: Platform operation across tenants. Requires the `depot-operator` role.
 
@@ -2237,6 +2239,113 @@ paths:
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
+  # ------------------------------------------------------------------ plans and billing
+  /v1/public/plans:
+    get:
+      tags: [Billing]
+      operationId: listPublicPlans
+      summary: Plans customers can choose
+      description: Listed plans, smallest first. Prices are in cents per month.
+      security: []
+      responses:
+        '200':
+          description: The plans on offer.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanOfferListResponse' }
+  /v1/billing:
+    get:
+      tags: [Billing]
+      operationId: getBilling
+      summary: The account's plan, storage and any open plan request
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+      responses:
+        '200':
+          description: The plan page.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BillingOverviewResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /v1/billing/plan-requests:
+    post:
+      tags: [Billing]
+      operationId: requestPlan
+      summary: Ask to change plan
+      description: |
+        Signed-in owners and admins only (not API keys). A free plan applies at once when the stored
+        files fit. A paid plan starts with the configured payment provider: `next` is `APPROVAL`
+        (the operator decides, and is emailed) or `PAYMENT` (send the customer to `redirectUrl`).
+        One open request per account.
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan]
+              properties:
+                plan: { type: string, description: Name of a listed plan, e.g. `family`. }
+      responses:
+        '201':
+          description: The request and what happens next.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanRequestStartedResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/billing/plan-requests/{id}:
+    delete:
+      tags: [Billing]
+      operationId: cancelPlanRequest
+      summary: Withdraw an open plan request
+      parameters:
+        - $ref: '#/components/parameters/XDepotTenant'
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/public/billing/webhooks/{provider}:
+    post:
+      tags: [Billing]
+      operationId: paymentWebhook
+      summary: A payment provider's notification
+      description: |
+        For payment gateways plugged in later. The named provider checks the notification is genuine;
+        a paid one applies the requested plan. 404 when the provider is unknown or the notification
+        is not valid.
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          '*/*':
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          description: Whether a request was settled by this notification.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookSettledResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
   # ------------------------------------------------------------------ operator
   /v1/operator/tenants:
     get:
@@ -2398,6 +2507,70 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
+  /v1/operator/plan-requests:
+    get:
+      tags: [Operator]
+      operationId: operatorPlanRequests
+      summary: Plan changes waiting for a decision or payment, oldest first
+      security:
+        - bearer: []
+      responses:
+        '200':
+          description: Open requests.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperatorPlanRequestListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /v1/operator/plan-requests/{id}/approve:
+    post:
+      tags: [Operator]
+      operationId: approvePlanRequest
+      summary: Apply the requested plan now
+      security:
+        - bearer: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanDecision' }
+      responses:
+        '200':
+          description: The approved request.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanRequestResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/operator/plan-requests/{id}/reject:
+    post:
+      tags: [Operator]
+      operationId: rejectPlanRequest
+      summary: Decline a plan request
+      security:
+        - bearer: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanDecision' }
+      responses:
+        '200':
+          description: The declined request.
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanRequestResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /v1/operator/integrity:
     get:
       tags: [Operator]
@@ -3127,10 +3300,68 @@ components:
         done: { type: boolean }
     WhoAmI:
       type: object
-      required: [tenantId, tenantSlug]
+      required: [tenantId, tenantSlug, operator]
       properties:
         tenantId: { type: string, format: uuid }
         tenantSlug: { $ref: '#/components/schemas/TenantSlug' }
+        operator: { type: boolean, description: Whether the caller has the `depot-operator` role. }
+    # -------------------------------------------------------------- plans and billing
+    PlanOffer:
+      type: object
+      required: [name, displayName, maxStorageBytes, maxEgressBytesPerMonth, priceCents, currency, period]
+      properties:
+        name: { type: string, examples: [family] }
+        displayName: { type: string, examples: [Family] }
+        description: { type: [string, 'null'] }
+        maxStorageBytes: { type: integer, format: int64 }
+        maxEgressBytesPerMonth: { type: integer, format: int64 }
+        priceCents: { type: integer, format: int64, description: Price per period in cents; 0 is free. }
+        currency: { type: string, examples: [ZAR] }
+        period: { type: string, enum: [month] }
+    PlanRequest:
+      type: object
+      required: [id, fromPlan, toPlan, toPlanName, status, amountCents, currency, requestedAt]
+      properties:
+        id: { type: string, format: uuid }
+        fromPlan: { type: string }
+        toPlan: { type: string }
+        toPlanName: { type: string }
+        status: { type: string, enum: [PENDING, AWAITING_PAYMENT, APPROVED, REJECTED, CANCELLED] }
+        amountCents: { type: integer, format: int64 }
+        currency: { type: string }
+        requestedAt: { type: string, format: date-time }
+        decidedAt: { type: [string, 'null'], format: date-time }
+        note: { type: [string, 'null'] }
+    BillingOverview:
+      type: object
+      required: [currentPlan, plans, storedBytes, maxStorageBytes]
+      properties:
+        currentPlan: { type: string }
+        plans: { type: array, items: { $ref: '#/components/schemas/PlanOffer' } }
+        storedBytes: { type: integer, format: int64 }
+        maxStorageBytes: { type: integer, format: int64 }
+        pending:
+          oneOf: [{ $ref: '#/components/schemas/PlanRequest' }, { type: 'null' }]
+    PlanRequestStarted:
+      type: object
+      required: [request, next]
+      properties:
+        request: { $ref: '#/components/schemas/PlanRequest' }
+        next: { type: string, enum: [APPROVAL, PAYMENT, DONE] }
+        redirectUrl: { type: [string, 'null'], description: Where to pay when `next` is `PAYMENT`. }
+    OperatorPlanRequest:
+      type: object
+      required: [request, tenantId, tenantName, tenantSlug, storedBytes]
+      properties:
+        request: { $ref: '#/components/schemas/PlanRequest' }
+        tenantId: { type: string, format: uuid }
+        tenantName: { type: string }
+        tenantSlug: { type: string }
+        storedBytes: { type: integer, format: int64 }
+    PlanDecision:
+      type: object
+      properties:
+        note: { type: [string, 'null'], description: Shown to the customer. }
 
     # -------------------------------------------------------------- API keys
     ApiKeyScope:
@@ -4081,3 +4312,18 @@ components:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/DeadLetterReplay' } } }]
     DeadLetterResponse:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/DeadLetter' } } } }]
+    PlanOfferListResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/PlanOffer' } } } }]
+    BillingOverviewResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/BillingOverview' } } }]
+    PlanRequestStartedResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/PlanRequestStarted' } } }]
+    PlanRequestResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/PlanRequest' } } }]
+    OperatorPlanRequestListResponse:
+      allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/OperatorPlanRequest' } } } }]
+    WebhookSettledResponse:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - properties:
+            data: { type: object, required: [settled], properties: { settled: { type: boolean } } }

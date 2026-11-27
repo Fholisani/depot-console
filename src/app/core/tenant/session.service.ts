@@ -22,6 +22,8 @@ export class SessionService {
   readonly canWrite = computed(() => ['OWNER', 'ADMIN', 'MEMBER'].includes(this.tenant()?.role ?? ''));
   /** The key from first login. Cleared once the user has seen it. */
   readonly firstKey = computed(() => this.current()?.apiKey ?? null);
+  /** Whether the signed-in user runs the platform (`depot-operator`); shows the operator page. */
+  readonly operator = signal(false);
 
   load(): void {
     if (this.loading()) {
@@ -33,6 +35,7 @@ export class SessionService {
       next: (t) => {
         this.current.set(t);
         this.loading.set(false);
+        this.api.me().subscribe({ next: (me) => this.operator.set(me.operator === true), error: () => this.operator.set(false) });
       },
       error: (e: ApiError) => {
         this.error.set(e);
@@ -51,5 +54,6 @@ export class SessionService {
   clear(): void {
     this.current.set(null);
     this.error.set(null);
+    this.operator.set(false);
   }
 }

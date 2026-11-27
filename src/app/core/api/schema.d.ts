@@ -1502,6 +1502,105 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/public/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plans customers can choose
+         * @description Listed plans, smallest first. Prices are in cents per month.
+         */
+        get: operations["listPublicPlans"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The account's plan, storage and any open plan request */
+        get: operations["getBilling"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/plan-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask to change plan
+         * @description Signed-in owners and admins only (not API keys). A free plan applies at once when the stored
+         *     files fit. A paid plan starts with the configured payment provider: `next` is `APPROVAL`
+         *     (the operator decides, and is emailed) or `PAYMENT` (send the customer to `redirectUrl`).
+         *     One open request per account.
+         */
+        post: operations["requestPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/plan-requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Withdraw an open plan request */
+        delete: operations["cancelPlanRequest"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/billing/webhooks/{provider}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A payment provider's notification
+         * @description For payment gateways plugged in later. The named provider checks the notification is genuine;
+         *     a paid one applies the requested plan. 404 when the provider is unknown or the notification
+         *     is not valid.
+         */
+        post: operations["paymentWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/operator/tenants": {
         parameters: {
             query?: never;
@@ -1602,6 +1701,57 @@ export interface paths {
         get: operations["operatorBilling"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/operator/plan-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Plan changes waiting for a decision or payment, oldest first */
+        get: operations["operatorPlanRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/operator/plan-requests/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply the requested plan now */
+        post: operations["approvePlanRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/operator/plan-requests/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decline a plan request */
+        post: operations["rejectPlanRequest"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1938,6 +2088,74 @@ export interface components {
             /** Format: uuid */
             tenantId: string;
             tenantSlug: components["schemas"]["TenantSlug"];
+            /** @description Whether the caller has the `depot-operator` role. */
+            operator: boolean;
+        };
+        PlanOffer: {
+            /** @example family */
+            name: string;
+            /** @example Family */
+            displayName: string;
+            description?: string | null;
+            /** Format: int64 */
+            maxStorageBytes: number;
+            /** Format: int64 */
+            maxEgressBytesPerMonth: number;
+            /**
+             * Format: int64
+             * @description Price per period in cents; 0 is free.
+             */
+            priceCents: number;
+            /** @example ZAR */
+            currency: string;
+            /** @enum {string} */
+            period: "month";
+        };
+        PlanRequest: {
+            /** Format: uuid */
+            id: string;
+            fromPlan: string;
+            toPlan: string;
+            toPlanName: string;
+            /** @enum {string} */
+            status: "PENDING" | "AWAITING_PAYMENT" | "APPROVED" | "REJECTED" | "CANCELLED";
+            /** Format: int64 */
+            amountCents: number;
+            currency: string;
+            /** Format: date-time */
+            requestedAt: string;
+            /** Format: date-time */
+            decidedAt?: string | null;
+            note?: string | null;
+        };
+        BillingOverview: {
+            currentPlan: string;
+            plans: components["schemas"]["PlanOffer"][];
+            /** Format: int64 */
+            storedBytes: number;
+            /** Format: int64 */
+            maxStorageBytes: number;
+            pending?: components["schemas"]["PlanRequest"] | null;
+        };
+        PlanRequestStarted: {
+            request: components["schemas"]["PlanRequest"];
+            /** @enum {string} */
+            next: "APPROVAL" | "PAYMENT" | "DONE";
+            /** @description Where to pay when `next` is `PAYMENT`. */
+            redirectUrl?: string | null;
+        };
+        OperatorPlanRequest: {
+            request: components["schemas"]["PlanRequest"];
+            /** Format: uuid */
+            tenantId: string;
+            tenantName: string;
+            tenantSlug: string;
+            /** Format: int64 */
+            storedBytes: number;
+        };
+        PlanDecision: {
+            /** @description Shown to the customer. */
+            note?: string | null;
         };
         ApiKeyScope: {
             readWrite: boolean;
@@ -3010,6 +3228,26 @@ export interface components {
         };
         DeadLetterResponse: components["schemas"]["Envelope"] & {
             data?: components["schemas"]["DeadLetter"][];
+        };
+        PlanOfferListResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["PlanOffer"][];
+        };
+        BillingOverviewResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["BillingOverview"];
+        };
+        PlanRequestStartedResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["PlanRequestStarted"];
+        };
+        PlanRequestResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["PlanRequest"];
+        };
+        OperatorPlanRequestListResponse: components["schemas"]["Envelope"] & {
+            data?: components["schemas"]["OperatorPlanRequest"][];
+        };
+        WebhookSettledResponse: components["schemas"]["Envelope"] & {
+            data?: {
+                settled: boolean;
+            };
         };
     };
     responses: {
@@ -5999,6 +6237,137 @@ export interface operations {
             503: components["responses"]["ServiceUnavailable"];
         };
     };
+    listPublicPlans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plans on offer. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanOfferListResponse"];
+                };
+            };
+        };
+    };
+    getBilling: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plan page. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingOverviewResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    requestPlan: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Name of a listed plan */
+                    plan: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The request and what happens next. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRequestStartedResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    cancelPlanRequest: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Tenant slug, needed only when a user belongs to several tenants. Ignored for API keys. */
+                "X-Depot-Tenant"?: components["parameters"]["XDepotTenant"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    paymentWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "*/*": string;
+            };
+        };
+        responses: {
+            /** @description Whether a request was settled by this notification. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookSettledResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
     operatorListTenants: {
         parameters: {
             query?: never;
@@ -6173,6 +6542,91 @@ export interface operations {
             400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    operatorPlanRequests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Open requests. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorPlanRequestListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    approvePlanRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PlanDecision"];
+            };
+        };
+        responses: {
+            /** @description The approved request. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRequestResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    rejectPlanRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PlanDecision"];
+            };
+        };
+        responses: {
+            /** @description The declined request. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRequestResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     operatorIntegrity: {

@@ -4,7 +4,7 @@ import { Observable, catchError, map, of, retry, throwError, timer } from 'rxjs'
 import { APP_CONFIG } from '../config/app-config';
 import { ApiError } from './api-error';
 import type {
-  Album, AlbumAddResult, AlbumItemPage, AlbumMembership, AlbumRemoved, ApiKey, CompleteUpload, CopyResult, CreateAlbum, CreateUpload, CreatedApiKey, CreatedWebhook, DepotObject, DuplicateMatches, Envelope, FileCounts, FileGroupFilter, FilePage, FirstLogin, LifecyclePreview, LifecycleRule, LifecycleRuleBody, Namespace, NamespaceSettings, NewApiKey, ObjectResult, OnboardingStep, PartTarget, Progress, RestoreResult, SearchResults, Share, ShareItemStat, SharedItemPage, SharedLink, SignupRequest, SignupResult, Tags, ThumbnailInfo, UpdateAlbum, Upload, UploadStatus, UsageReport, Version, ViewInfo, Webhook, WebhookBody, WhoAmI,
+  Album, AlbumAddResult, BillingOverview, OperatorPlanRequest, PlanOffer, PlanRequest, PlanRequestStarted, AlbumItemPage, AlbumMembership, AlbumRemoved, ApiKey, CompleteUpload, CopyResult, CreateAlbum, CreateUpload, CreatedApiKey, CreatedWebhook, DepotObject, DuplicateMatches, Envelope, FileCounts, FileGroupFilter, FilePage, FirstLogin, LifecyclePreview, LifecycleRule, LifecycleRuleBody, Namespace, NamespaceSettings, NewApiKey, ObjectResult, OnboardingStep, PartTarget, Progress, RestoreResult, SearchResults, Share, ShareItemStat, SharedItemPage, SharedLink, SignupRequest, SignupResult, Tags, ThumbnailInfo, UpdateAlbum, Upload, UploadStatus, UsageReport, Version, ViewInfo, Webhook, WebhookBody, WhoAmI,
 } from './models';
 
 /** What a shared album item's URL points at: the 480 px tile, the 1600 px preview, or the file. */
@@ -59,6 +59,31 @@ export class DepotApi {
     return this.get<UsageReport>('/v1/usage');
   }
 
+  // ------------------------------------------------------------------ plans
+  /** The plans on offer (no sign-in needed). */
+  plans(): Observable<PlanOffer[]> {
+    return this.get<PlanOffer[]>('/v1/public/plans');
+  }
+  /** The account's plan, storage, the plans it can choose, and an open request. */
+  billing(): Observable<BillingOverview> {
+    return this.get<BillingOverview>('/v1/billing');
+  }
+  requestPlan(plan: string): Observable<PlanRequestStarted> {
+    return this.send<PlanRequestStarted>('POST', '/v1/billing/plan-requests', { plan });
+  }
+  cancelPlanRequest(id: string): Observable<void> {
+    return this.send<void>('DELETE', `/v1/billing/plan-requests/${id}`);
+  }
+  /** Operator only: plan changes waiting for a decision. */
+  operatorPlanRequests(): Observable<OperatorPlanRequest[]> {
+    return this.get<OperatorPlanRequest[]>('/v1/operator/plan-requests');
+  }
+  approvePlanRequest(id: string, note: string | null): Observable<PlanRequest> {
+    return this.send<PlanRequest>('POST', `/v1/operator/plan-requests/${id}/approve`, { note });
+  }
+  rejectPlanRequest(id: string, note: string | null): Observable<PlanRequest> {
+    return this.send<PlanRequest>('POST', `/v1/operator/plan-requests/${id}/reject`, { note });
+  }
   // ------------------------------------------------------------------ API keys
 
   apiKeys(): Observable<ApiKey[]> {

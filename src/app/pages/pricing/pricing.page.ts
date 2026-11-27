@@ -12,6 +12,8 @@ interface PricingPlan {
   features: string[];
   cta: string;
   available: boolean;
+  /** Where the button goes; sign-up when missing. Paid plans go to the plan page (signs in first). */
+  link?: string;
 }
 
 interface Pricing {
@@ -50,7 +52,7 @@ interface Pricing {
               <ul>
                 @for (f of plan.features; track f) { <li>{{ f }}</li> }
               </ul>
-              <ion-button expand="block" [disabled]="!plan.available" routerLink="/signup"
+              <ion-button expand="block" [disabled]="!plan.available" [routerLink]="plan.link ?? '/signup'"
                 [fill]="plan.available ? 'solid' : 'outline'">{{ plan.cta }}</ion-button>
             </div>
           }

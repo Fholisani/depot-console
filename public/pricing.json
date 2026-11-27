@@ -18,20 +18,35 @@
       "available": true
     },
     {
-      "id": "pro",
-      "name": "Pro",
-      "price": null,
+      "id": "family",
+      "name": "Family",
+      "price": 15,
       "period": "month",
-      "summary": "For businesses that store more.",
+      "summary": "For a family's photos and videos.",
       "features": [
-        "Larger storage and download allowances",
-        "Lifecycle rules and archive tier",
-        "Webhooks",
-        "Email support"
+        "50 GB storage",
+        "200 GB downloads a month",
+        "Everything in Free"
       ],
-      "cta": "Coming soon",
-      "available": false
+      "cta": "Choose Family",
+      "available": true,
+      "link": "/app/plan"
+    },
+    {
+      "id": "plus",
+      "name": "Plus",
+      "price": 55,
+      "period": "month",
+      "summary": "For big collections and lots of video.",
+      "features": [
+        "200 GB storage",
+        "500 GB downloads a month",
+        "Everything in Family"
+      ],
+      "cta": "Choose Plus",
+      "available": true,
+      "link": "/app/plan"
     }
   ],
-  "note": "Plans and limits are set by the Depot operator. Contact us for higher limits."
+  "note": "Already have an account? Choose a plan and we switch you over once it is approved. We contact you about payment."
 }

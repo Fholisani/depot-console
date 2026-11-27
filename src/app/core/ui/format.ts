@@ -43,3 +43,14 @@ export function describeError(
   const text = extra[e.reason] ?? COMMON[e.reason] ?? e.message;
   return e.requestId && !(e.reason in extra) && !(e.reason in COMMON) ? `${text} (request ${e.requestId})` : text;
 }
+
+/** A price in cents, e.g. 1500 ZAR → "R15"; 0 → "Free". Cents show only when there are any. */
+export function formatMoney(cents: number, currency: string): string {
+  if (cents === 0) {
+    return 'Free';
+  }
+  const whole = cents % 100 === 0;
+  return new Intl.NumberFormat('en-ZA', {
+    style: 'currency', currency, minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: whole ? 0 : 2,
+  }).format(cents / 100).replace(/^(\D+?)\s/, '$1');
+}

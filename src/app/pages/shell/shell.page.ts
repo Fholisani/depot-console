@@ -36,7 +36,11 @@ import { forgetThumbnails } from '../../core/ui/thumbnail-loader';
             <a routerLink="/app/files" routerLinkActive="active">Files</a>
             <a routerLink="/app/albums" routerLinkActive="active">Albums</a>
             <a routerLink="/app/namespaces" routerLinkActive="active">Folders</a>
+            <a routerLink="/app/plan" routerLinkActive="active">Plan</a>
             <a routerLink="/app/keys" routerLinkActive="active">Developers</a>
+            @if (session.operator()) {
+              <a routerLink="/app/operator" routerLinkActive="active">Operator</a>
+            }
           </nav>
         </ion-toolbar>
       }

@@ -55,6 +55,14 @@ export const routes: Routes = [
           import('./pages/namespace-detail/namespace-detail.page').then((m) => m.NamespaceDetailPage),
       },
       {
+        path: 'plan',
+        loadComponent: () => import('./pages/plan/plan.page').then((m) => m.PlanPage),
+      },
+      {
+        path: 'operator',
+        loadComponent: () => import('./pages/operator/operator.page').then((m) => m.OperatorPage),
+      },
+      {
         path: 'keys',
         loadComponent: () => import('./pages/api-keys/api-keys.page').then((m) => m.ApiKeysPage),
       },

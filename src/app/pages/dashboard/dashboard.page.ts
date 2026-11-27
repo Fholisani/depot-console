@@ -56,7 +56,7 @@ const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
             <ion-note>{{ bytes(u.storage.reservedBytes) }} is being uploaded right now.</ion-note>
           }
           <ion-button routerLink="/app/files" class="cta">Upload files</ion-button>
-          <a routerLink="/pricing" class="small">Need more space?</a>
+          <a routerLink="/app/plan" class="small">Need more space?</a>
         </div>
       </section>
 

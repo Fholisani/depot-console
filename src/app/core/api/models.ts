@@ -15,6 +15,11 @@ export type Namespace = Schemas['Namespace'];
 /** Every field is optional on the wire: create applies defaults, update keeps what is missing. */
 export type NamespaceSettings = Partial<Schemas['NamespaceSettings']>;
 export type UsageReport = Schemas['UsageReport'];
+export type PlanOffer = Schemas['PlanOffer'];
+export type PlanRequest = Schemas['PlanRequest'];
+export type BillingOverview = Schemas['BillingOverview'];
+export type PlanRequestStarted = Schemas['PlanRequestStarted'];
+export type OperatorPlanRequest = Schemas['OperatorPlanRequest'];
 export type ApiKey = Schemas['ApiKey'];
 export type CreatedApiKey = Schemas['CreatedApiKey'];
 export type NewApiKey = Schemas['NewApiKey'];
