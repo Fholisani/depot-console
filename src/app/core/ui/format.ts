@@ -54,3 +54,8 @@ export function formatMoney(cents: number, currency: string): string {
     style: 'currency', currency, minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: whole ? 0 : 2,
   }).format(cents / 100).replace(/^(\D+?)\s/, '$1');
 }
+
+/** A plan size without needless decimals: 50 GiB → "50 GB", 1.5 GiB → "1.50 GB". */
+export function formatPlanSize(bytes: number): string {
+  return formatBytes(bytes).replace(/\.0+ /, ' ');
+}

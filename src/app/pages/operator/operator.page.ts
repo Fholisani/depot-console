@@ -28,9 +28,13 @@ import { describeError, formatBytes, formatMoney } from '../../core/ui/format';
                   {{ r.request.fromPlan }} → <strong>{{ r.request.toPlanName }}</strong> ·
                   {{ money(r.request.amountCents, r.request.currency) }} a month
                 </p>
+                <p>Stores {{ bytes(r.storedBytes) }} · asked {{ r.request.requestedAt | date: 'medium' }}</p>
                 <p>
-                  Stores {{ bytes(r.storedBytes) }} · asked {{ r.request.requestedAt | date: 'medium' }}
-                  @if (r.request.status === 'AWAITING_PAYMENT') { · waiting for payment }
+                  @if (r.contactEmail; as email) {
+                    Contact <a [href]="'mailto:' + email">{{ email }}</a>
+                  } @else {
+                    No email on their sign-in
+                  }
                 </p>
               </ion-label>
               <ion-button slot="end" [disabled]="busy()" (click)="decide(r, true)">Approve</ion-button>

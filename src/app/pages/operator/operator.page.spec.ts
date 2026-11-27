@@ -7,6 +7,7 @@ import { OperatorPage } from './operator.page';
 
 const waiting = (): OperatorPlanRequest => ({
   tenantId: 't1', tenantName: 'Mashegana', tenantSlug: 'mashegana', storedBytes: 9 * 1024 ** 3,
+  contactEmail: 'owner@family.test',
   request: { id: 'r1', fromPlan: 'free', toPlan: 'family', toPlanName: 'Family', status: 'PENDING',
     amountCents: 1500, currency: 'ZAR', requestedAt: '2026-05-01T10:00:00Z', decidedAt: null, note: null },
 });
@@ -23,8 +24,10 @@ function setup(api: Partial<DepotApi>) {
 }
 
 describe('OperatorPage', () => {
-  it('lists waiting requests with who, what and the price', () => {
+  it('lists waiting requests with who, what, the price and who to contact', () => {
     const { text } = setup({ operatorPlanRequests: () => of([waiting()]) });
+    expect(text()).toContain('Contact owner@family.test');
+    expect(document.querySelector('a[href="mailto:owner@family.test"]')).not.toBeNull();
     expect(text()).toContain('Mashegana');
     expect(text()).toContain('Family');
     expect(text()).toContain('R15');

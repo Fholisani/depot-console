@@ -16,7 +16,8 @@ const offer = (name: string, gb: number, cents: number): PlanOffer => ({
 });
 const PLANS = [offer('free', 10, 0), offer('family', 50, 1500), offer('plus', 200, 5500)];
 const overview = (extra: Partial<BillingOverview> = {}): BillingOverview => ({
-  currentPlan: 'free', plans: PLANS, storedBytes: 8 * GB, maxStorageBytes: 10 * GB, pending: null, ...extra,
+  currentPlan: 'free', plans: PLANS, storedBytes: 8 * GB, reservedBytes: 0, maxStorageBytes: 10 * GB, pending: null,
+  lastDecision: null, ...extra,
 });
 
 function setup(api: Partial<DepotApi>, canManage = true, confirmed = true) {
@@ -31,7 +32,7 @@ function setup(api: Partial<DepotApi>, canManage = true, confirmed = true) {
   const fixture = TestBed.createComponent(PlanPage);
   fixture.detectChanges();
   const text = () => { fixture.detectChanges(); return (fixture.nativeElement as HTMLElement).textContent ?? ''; };
-  return { fixture, page: fixture.componentInstance as unknown as PlanPage & { goTo(url: string): void }, text };
+  return { fixture, page: fixture.componentInstance, text };
 }
 
 describe('PlanPage', () => {
@@ -52,7 +53,7 @@ describe('PlanPage', () => {
       const request = { id: 'r1', fromPlan: 'free', toPlan: plan, toPlanName: 'Family', status: 'PENDING' as const,
         amountCents: 1500, currency: 'ZAR', requestedAt: '2026-05-01T10:00:00Z', decidedAt: null, note: null };
       state = overview({ pending: request });
-      return of<PlanRequestStarted>({ request, next: 'APPROVAL', redirectUrl: null });
+      return of<PlanRequestStarted>({ request, next: 'APPROVAL' });
     });
     const { page, text } = setup({ billing: () => of(state), requestPlan });
     await page.choose(PLANS[1]);
@@ -69,14 +70,32 @@ describe('PlanPage', () => {
     expect(requestPlan).not.toHaveBeenCalled();
   });
 
-  it('sends the customer to pay when a payment provider answers PAYMENT', async () => {
-    const request = { id: 'r1', fromPlan: 'free', toPlan: 'plus', toPlanName: 'Plus', status: 'AWAITING_PAYMENT' as const,
-      amountCents: 5500, currency: 'ZAR', requestedAt: '2026-05-01T10:00:00Z', decidedAt: null, note: null };
-    const { page } = setup({ billing: () => of(overview()),
-      requestPlan: () => of<PlanRequestStarted>({ request, next: 'PAYMENT', redirectUrl: 'https://pay.example/c/1' }) });
-    const goTo = vi.spyOn(page, 'goTo').mockImplementation(() => undefined);
-    await page.choose(PLANS[2]);
-    expect(goTo).toHaveBeenCalledWith('https://pay.example/c/1');
+  it('shows a declined request with the operator\'s note, and a plan the account moved to', () => {
+    const decided = { id: 'r2', fromPlan: 'free', toPlan: 'plus', toPlanName: 'Plus', amountCents: 5500,
+      currency: 'ZAR', requestedAt: '2026-05-01T10:00:00Z', decidedAt: '2026-05-02T10:00:00Z' };
+    const declined = setup({ billing: () => of(overview({ lastDecision: { ...decided, status: 'REJECTED',
+      note: 'Not enough disk yet' } })) });
+    expect(declined.text()).toContain('Your request for Plus was declined');
+    expect(declined.text()).toContain('Not enough disk yet');
+    TestBed.resetTestingModule();
+    const approved = setup({ billing: () => of(overview({ currentPlan: 'plus', lastDecision: { ...decided,
+      status: 'APPROVED', note: null } })) });
+    expect(approved.text()).toContain('You moved to Plus');
+    expect(approved.text()).not.toContain('declined');
+  });
+
+  it('counts files still uploading when deciding what fits', () => {
+    const { text } = setup({ billing: () => of(overview({ currentPlan: 'family', storedBytes: 6 * GB,
+      reservedBytes: 5 * GB, maxStorageBytes: 50 * GB })) });
+    expect(text()).toContain('11.0 GB of 50.0 GB used');
+    expect(text()).toContain('Your files take more than this plan holds');
+    expect(text()).not.toContain('Choose Free');
+  });
+
+  it('shows plan sizes without needless decimals', () => {
+    const { text } = setup({ billing: () => of(overview()) });
+    expect(text()).toContain('50 GB storage');
+    expect(text()).toContain('200 GB storage');
   });
 
   it('cancels a waiting request', async () => {

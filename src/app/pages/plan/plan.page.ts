@@ -6,12 +6,12 @@ import { DepotApi } from '../../core/api/depot-api.service';
 import type { BillingOverview, PlanOffer } from '../../core/api/models';
 import { SessionService } from '../../core/tenant/session.service';
 import { ConfirmService } from '../../core/ui/confirm.service';
-import { describeError, formatBytes, formatMoney } from '../../core/ui/format';
+import { describeError, formatBytes, formatMoney, formatPlanSize } from '../../core/ui/format';
 
 /**
- * "Need more space?": the account's plan and the plans it can move to. Choosing a paid plan sends a
- * request; how it is paid for is the API's payment provider (today the operator approves; with a gateway
- * the API answers PAYMENT and the customer is sent to pay). A free plan applies at once.
+ * "Need more space?": the account's plan and the plans it can move to. Choosing a paid plan sends a request
+ * that waits for approval (the operator arranges payment); a free plan applies at once. The last decision
+ * on a request (approved or declined, with the operator's note) shows for 30 days.
  */
 @Component({
   selector: 'app-plan',
@@ -25,7 +25,7 @@ import { describeError, formatBytes, formatMoney } from '../../core/ui/format';
       <section class="card">
         <p class="big">
           <strong>{{ currentName() }}</strong> ·
-          {{ bytes(o.storedBytes) }} of {{ bytes(o.maxStorageBytes) }} used
+          {{ bytes(used()) }} of {{ bytes(o.maxStorageBytes) }} used
         </p>
         <ion-progress-bar [value]="share()" [color]="share() > 0.9 ? 'danger' : 'primary'"
           aria-label="Space used" />
@@ -37,17 +37,25 @@ import { describeError, formatBytes, formatMoney } from '../../core/ui/format';
           <p>
             You asked for <strong>{{ r.toPlanName }}</strong>
             ({{ money(r.amountCents, r.currency) }} a month) on {{ r.requestedAt | date: 'mediumDate' }}.
-            @if (r.status === 'AWAITING_PAYMENT') {
-              It changes as soon as your payment is confirmed.
-            } @else {
-              We will switch your account over once it is approved, and the extra space is yours straight away.
-            }
+            We will be in touch about payment, and switch your account over once it is approved.
           </p>
           @if (session.canManage()) {
             <ion-button fill="outline" color="medium" [disabled]="busy()" (click)="cancel(r.id)">
               Cancel request
             </ion-button>
           }
+        </section>
+      }
+
+      @if (!o.pending && o.lastDecision; as d) {
+        <section class="card decision" [class.declined]="d.status === 'REJECTED'" role="status">
+          @if (d.status === 'REJECTED') {
+            <p>Your request for <strong>{{ d.toPlanName }}</strong> was declined
+              on {{ d.decidedAt | date: 'mediumDate' }}.</p>
+          } @else {
+            <p>You moved to <strong>{{ d.toPlanName }}</strong> on {{ d.decidedAt | date: 'mediumDate' }}.</p>
+          }
+          @if (d.note) { <p class="muted">“{{ d.note }}”</p> }
         </section>
       }
 
@@ -64,9 +72,9 @@ import { describeError, formatBytes, formatMoney } from '../../core/ui/format';
               @if (p.priceCents > 0) { <span class="muted">/ {{ p.period }}</span> }
             </p>
             <ul>
-              <li>{{ bytes(p.maxStorageBytes) }} storage</li>
+              <li>{{ size(p.maxStorageBytes) }} storage</li>
               @if (p.maxEgressBytesPerMonth > 0) {
-                <li>{{ bytes(p.maxEgressBytesPerMonth) }} downloads a month</li>
+                <li>{{ size(p.maxEgressBytesPerMonth) }} downloads a month</li>
               }
             </ul>
             @if (p.description) { <p class="muted">{{ p.description }}</p> }
@@ -74,7 +82,7 @@ import { describeError, formatBytes, formatMoney } from '../../core/ui/format';
               <ion-note>Your plan</ion-note>
             } @else if (!session.canManage()) {
               <ion-note>Ask the account owner to change plan.</ion-note>
-            } @else if (o.storedBytes > p.maxStorageBytes) {
+            } @else if (used() > p.maxStorageBytes) {
               <ion-note>Your files take more than this plan holds.</ion-note>
             } @else {
               <ion-button expand="block" [disabled]="busy() || !!o.pending" (click)="choose(p)">
@@ -94,6 +102,8 @@ import { describeError, formatBytes, formatMoney } from '../../core/ui/format';
     .card h2 { font-size: 1.1rem; margin: 0 0 0.5rem; }
     .big { font-size: 1.15rem; margin: 0 0 0.6rem; }
     .pending { border-color: var(--ion-color-warning); }
+    .decision p { margin: 0 0 0.35rem; }
+    .decision.declined { border-color: var(--ion-color-danger); }
     .plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1.25rem; }
     .plan.current { border-color: var(--ion-color-primary); box-shadow: 0 0 0 1px var(--ion-color-primary); }
     .price { margin: 0.25rem 0; }
@@ -111,14 +121,20 @@ export class PlanPage implements OnInit {
   protected readonly busy = signal(false);
   protected readonly bytes = formatBytes;
   protected readonly money = formatMoney;
+  protected readonly size = formatPlanSize;
 
   protected readonly currentName = computed(() => {
     const o = this.overview();
     return o?.plans.find((p) => p.name === o.currentPlan)?.displayName ?? o?.currentPlan ?? '';
   });
+  /** Stored plus being uploaded: what has to fit a plan. */
+  protected readonly used = computed(() => {
+    const o = this.overview();
+    return o ? o.storedBytes + o.reservedBytes : 0;
+  });
   protected readonly share = computed(() => {
     const o = this.overview();
-    return o && o.maxStorageBytes > 0 ? Math.min(1, o.storedBytes / o.maxStorageBytes) : 0;
+    return o && o.maxStorageBytes > 0 ? Math.min(1, this.used() / o.maxStorageBytes) : 0;
   });
 
   ngOnInit(): void {
@@ -137,9 +153,9 @@ export class PlanPage implements OnInit {
     const ok = await this.confirm.ask({
       header: `Move to ${plan.displayName}?`,
       message: paid
-        ? `${formatBytes(plan.maxStorageBytes)} for ${formatMoney(plan.priceCents, plan.currency)} a month. `
-          + 'We will let you know how to pay, and switch you over once it is approved.'
-        : `${formatBytes(plan.maxStorageBytes)} of storage, free. This applies straight away.`,
+        ? `${formatPlanSize(plan.maxStorageBytes)} for ${formatMoney(plan.priceCents, plan.currency)} a month. `
+          + 'We will be in touch about payment, and switch you over once it is approved.'
+        : `${formatPlanSize(plan.maxStorageBytes)} of storage, free. This applies straight away.`,
       confirmText: paid ? 'Send request' : `Move to ${plan.displayName}`,
     });
     if (!ok) {
@@ -151,10 +167,6 @@ export class PlanPage implements OnInit {
     this.api.requestPlan(plan.name).subscribe({
       next: (s) => {
         this.busy.set(false);
-        if (s.next === 'PAYMENT' && s.redirectUrl) {
-          this.goTo(s.redirectUrl);
-          return;
-        }
         this.done.set(s.next === 'DONE'
           ? `You are now on ${plan.displayName}.`
           : `Request sent. We will be in touch about ${plan.displayName}.`);
@@ -189,10 +201,5 @@ export class PlanPage implements OnInit {
         this.load();
       },
     });
-  }
-
-  /** Sends the customer to the payment provider's page (only when a gateway is plugged in). */
-  protected goTo(url: string): void {
-    window.location.assign(url);
   }
 }

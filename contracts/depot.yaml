@@ -113,7 +113,7 @@ tags:
   - name: Public
     description: Unauthenticated reads from namespaces marked public.
   - name: Billing
-    description: Plans customers can choose, plan requests, and payment provider notifications.
+    description: Plans customers can choose, and requests to change plan.
   - name: Operator
     description: Platform operation across tenants. Requires the `depot-operator` role.
 
@@ -2276,10 +2276,11 @@ paths:
       operationId: requestPlan
       summary: Ask to change plan
       description: |
-        Signed-in owners and admins only (not API keys). A free plan applies at once when the stored
-        files fit. A paid plan starts with the configured payment provider: `next` is `APPROVAL`
-        (the operator decides, and is emailed) or `PAYMENT` (send the customer to `redirectUrl`).
-        One open request per account.
+        Signed-in owners and admins only (not API keys). A free plan applies at once (`next: DONE`)
+        when the files (stored and being uploaded) fit. A paid plan waits (`next: APPROVAL`): the
+        configured payment provider takes over; with manual billing the operator is emailed, arranges
+        payment and approves. One open request per account: asking again, asking for the current plan,
+        or a plan the files do not fit answers 409 `PLAN_REQUEST_CONFLICT`.
       parameters:
         - $ref: '#/components/parameters/XDepotTenant'
       requestBody:
@@ -2302,6 +2303,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+
   /v1/billing/plan-requests/{id}:
     delete:
       tags: [Billing]
@@ -2319,34 +2321,8 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /v1/public/billing/webhooks/{provider}:
-    post:
-      tags: [Billing]
-      operationId: paymentWebhook
-      summary: A payment provider's notification
-      description: |
-        For payment gateways plugged in later. The named provider checks the notification is genuine;
-        a paid one applies the requested plan. 404 when the provider is unknown or the notification
-        is not valid.
-      security: []
-      parameters:
-        - name: provider
-          in: path
-          required: true
-          schema: { type: string }
-      requestBody:
-        content:
-          '*/*':
-            schema: { type: string, format: binary }
-      responses:
-        '200':
-          description: Whether a request was settled by this notification.
-          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/WebhookSettledResponse' }
-        '404': { $ref: '#/components/responses/NotFound' }
   # ------------------------------------------------------------------ operator
+
   /v1/operator/tenants:
     get:
       tags: [Operator]
@@ -2511,7 +2487,7 @@ paths:
     get:
       tags: [Operator]
       operationId: operatorPlanRequests
-      summary: Plan changes waiting for a decision or payment, oldest first
+      summary: Plan changes waiting for a decision, oldest first
       security:
         - bearer: []
       responses:
@@ -2528,6 +2504,9 @@ paths:
       tags: [Operator]
       operationId: approvePlanRequest
       summary: Apply the requested plan now
+      description: |
+        409 `PLAN_REQUEST_CONFLICT` when the request was already decided, the account's plan changed
+        since it asked, or its files no longer fit the new plan.
       security:
         - bearer: []
       parameters:
@@ -2543,10 +2522,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PlanRequestResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+
   /v1/operator/plan-requests/{id}/reject:
     post:
       tags: [Operator]
@@ -2567,10 +2548,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PlanRequestResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+
   /v1/operator/integrity:
     get:
       tags: [Operator]
@@ -3186,6 +3169,7 @@ components:
         | JOB_NOT_FOUND | 3601 | 404 | no |
         | SEARCH_UNAVAILABLE | 3611 | 503 | yes |
         | WEBHOOK_URL_NOT_ALLOWED | 3621 | 422 | no |
+        | PLAN_REQUEST_CONFLICT | 3701 | 409 | no |
         | NOT_FOUND | 404 | 404 | no |
         | METHOD_NOT_ALLOWED | 405 | 405 | no |
         | NOT_ACCEPTABLE | 406 | 406 | no |
@@ -3203,7 +3187,7 @@ components:
              CONTENT_TYPE_NOT_ALLOWED, OBJECT_UPLOADING, OBJECT_VERIFYING, OBJECT_PROCESSING,
              OBJECT_CORRUPT, OBJECT_DELETED, VERSION_NOT_FOUND, PRECONDITION_FAILED, OBJECT_MISSING,
              STORAGE_UNAVAILABLE, DATABASE_UNAVAILABLE, TIER_NOT_ALLOWED, IDENTITY_UNAVAILABLE,
-             PASSIVE_SLOT_RESTRICTED, JOB_NOT_FOUND, SEARCH_UNAVAILABLE, WEBHOOK_URL_NOT_ALLOWED,
+             PASSIVE_SLOT_RESTRICTED, JOB_NOT_FOUND, SEARCH_UNAVAILABLE, WEBHOOK_URL_NOT_ALLOWED, PLAN_REQUEST_CONFLICT,
              NOT_FOUND, METHOD_NOT_ALLOWED, NOT_ACCEPTABLE, PAYLOAD_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE,
              RANGE_NOT_SATISFIABLE, INTERNAL_ERROR]
 
@@ -3326,7 +3310,7 @@ components:
         fromPlan: { type: string }
         toPlan: { type: string }
         toPlanName: { type: string }
-        status: { type: string, enum: [PENDING, AWAITING_PAYMENT, APPROVED, REJECTED, CANCELLED] }
+        status: { type: string, enum: [PENDING, APPROVED, REJECTED, CANCELLED] }
         amountCents: { type: integer, format: int64 }
         currency: { type: string }
         requestedAt: { type: string, format: date-time }
@@ -3334,21 +3318,25 @@ components:
         note: { type: [string, 'null'] }
     BillingOverview:
       type: object
-      required: [currentPlan, plans, storedBytes, maxStorageBytes]
+      required: [currentPlan, plans, storedBytes, reservedBytes, maxStorageBytes]
       properties:
         currentPlan: { type: string }
         plans: { type: array, items: { $ref: '#/components/schemas/PlanOffer' } }
         storedBytes: { type: integer, format: int64 }
+        reservedBytes: { type: integer, format: int64, description: Bytes of uploads in progress. }
         maxStorageBytes: { type: integer, format: int64 }
         pending:
+          description: The request waiting for a decision.
+          oneOf: [{ $ref: '#/components/schemas/PlanRequest' }, { type: 'null' }]
+        lastDecision:
+          description: The latest approved or declined request of the last 30 days, with the operator's note.
           oneOf: [{ $ref: '#/components/schemas/PlanRequest' }, { type: 'null' }]
     PlanRequestStarted:
       type: object
       required: [request, next]
       properties:
         request: { $ref: '#/components/schemas/PlanRequest' }
-        next: { type: string, enum: [APPROVAL, PAYMENT, DONE] }
-        redirectUrl: { type: [string, 'null'], description: Where to pay when `next` is `PAYMENT`. }
+        next: { type: string, enum: [APPROVAL, DONE], description: APPROVAL waits for a decision; DONE applied it. }
     OperatorPlanRequest:
       type: object
       required: [request, tenantId, tenantName, tenantSlug, storedBytes]
@@ -3358,10 +3346,11 @@ components:
         tenantName: { type: string }
         tenantSlug: { type: string }
         storedBytes: { type: integer, format: int64 }
+        contactEmail: { type: [string, 'null'], description: Email of who asked, to arrange payment. }
     PlanDecision:
       type: object
       properties:
-        note: { type: [string, 'null'], description: Shown to the customer. }
+        note: { type: [string, 'null'], maxLength: 200, description: Shown to the customer. }
 
     # -------------------------------------------------------------- API keys
     ApiKeyScope:
@@ -4322,8 +4311,3 @@ components:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { $ref: '#/components/schemas/PlanRequest' } } }]
     OperatorPlanRequestListResponse:
       allOf: [{ $ref: '#/components/schemas/Envelope' }, { properties: { data: { type: array, items: { $ref: '#/components/schemas/OperatorPlanRequest' } } } }]
-    WebhookSettledResponse:
-      allOf:
-        - $ref: '#/components/schemas/Envelope'
-        - properties:
-            data: { type: object, required: [settled], properties: { settled: { type: boolean } } }

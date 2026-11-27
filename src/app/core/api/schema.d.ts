@@ -1550,10 +1550,11 @@ export interface paths {
         put?: never;
         /**
          * Ask to change plan
-         * @description Signed-in owners and admins only (not API keys). A free plan applies at once when the stored
-         *     files fit. A paid plan starts with the configured payment provider: `next` is `APPROVAL`
-         *     (the operator decides, and is emailed) or `PAYMENT` (send the customer to `redirectUrl`).
-         *     One open request per account.
+         * @description Signed-in owners and admins only (not API keys). A free plan applies at once (`next: DONE`)
+         *     when the files (stored and being uploaded) fit. A paid plan waits (`next: APPROVAL`): the
+         *     configured payment provider takes over; with manual billing the operator is emailed, arranges
+         *     payment and approves. One open request per account: asking again, asking for the current plan,
+         *     or a plan the files do not fit answers 409 `PLAN_REQUEST_CONFLICT`.
          */
         post: operations["requestPlan"];
         delete?: never;
@@ -1574,28 +1575,6 @@ export interface paths {
         post?: never;
         /** Withdraw an open plan request */
         delete: operations["cancelPlanRequest"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/public/billing/webhooks/{provider}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * A payment provider's notification
-         * @description For payment gateways plugged in later. The named provider checks the notification is genuine;
-         *     a paid one applies the requested plan. 404 when the provider is unknown or the notification
-         *     is not valid.
-         */
-        post: operations["paymentWebhook"];
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1714,7 +1693,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Plan changes waiting for a decision or payment, oldest first */
+        /** Plan changes waiting for a decision, oldest first */
         get: operations["operatorPlanRequests"];
         put?: never;
         post?: never;
@@ -1733,7 +1712,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Apply the requested plan now */
+        /**
+         * Apply the requested plan now
+         * @description 409 `PLAN_REQUEST_CONFLICT` when the request was already decided, the account's plan changed
+         *     since it asked, or its files no longer fit the new plan.
+         */
         post: operations["approvePlanRequest"];
         delete?: never;
         options?: never;
@@ -2001,6 +1984,7 @@ export interface components {
          *     | JOB_NOT_FOUND | 3601 | 404 | no |
          *     | SEARCH_UNAVAILABLE | 3611 | 503 | yes |
          *     | WEBHOOK_URL_NOT_ALLOWED | 3621 | 422 | no |
+         *     | PLAN_REQUEST_CONFLICT | 3701 | 409 | no |
          *     | NOT_FOUND | 404 | 404 | no |
          *     | METHOD_NOT_ALLOWED | 405 | 405 | no |
          *     | NOT_ACCEPTABLE | 406 | 406 | no |
@@ -2010,7 +1994,7 @@ export interface components {
          *     | INTERNAL_ERROR | 500 | 500 | no |
          * @enum {string}
          */
-        ErrorReason: "VALIDATION_ERROR" | "MALFORMED_REQUEST" | "SLUG_TAKEN" | "IDEMPOTENCY_KEY_REUSED" | "NAMESPACE_EXISTS" | "NAMESPACE_PROTECTED" | "NAMESPACE_NOT_EMPTY" | "CREDENTIAL_INVALID" | "INSUFFICIENT_SCOPE" | "INSUFFICIENT_ROLE" | "TENANT_SUSPENDED" | "EMAIL_NOT_VERIFIED" | "RESOURCE_NOT_FOUND" | "TENANT_SELECTION_REQUIRED" | "TENANT_NOT_RESOLVED" | "TENANT_NOT_A_MEMBER" | "NAMESPACE_NOT_FOUND" | "QUOTA_STORAGE_EXCEEDED" | "QUOTA_EGRESS_EXCEEDED" | "OBJECT_TOO_LARGE" | "RATE_LIMITED" | "DAILY_LIMIT_REACHED" | "UPLOAD_NOT_FOUND" | "UPLOAD_EXPIRED" | "UPLOAD_INCOMPLETE" | "UPLOAD_CHECKSUM_MISMATCH" | "UPLOAD_SIZE_MISMATCH" | "PART_CHECKSUM_MISMATCH" | "CONTENT_TYPE_NOT_ALLOWED" | "OBJECT_UPLOADING" | "OBJECT_VERIFYING" | "OBJECT_PROCESSING" | "OBJECT_CORRUPT" | "OBJECT_DELETED" | "VERSION_NOT_FOUND" | "PRECONDITION_FAILED" | "OBJECT_MISSING" | "STORAGE_UNAVAILABLE" | "DATABASE_UNAVAILABLE" | "TIER_NOT_ALLOWED" | "IDENTITY_UNAVAILABLE" | "PASSIVE_SLOT_RESTRICTED" | "JOB_NOT_FOUND" | "SEARCH_UNAVAILABLE" | "WEBHOOK_URL_NOT_ALLOWED" | "NOT_FOUND" | "METHOD_NOT_ALLOWED" | "NOT_ACCEPTABLE" | "PAYLOAD_TOO_LARGE" | "UNSUPPORTED_MEDIA_TYPE" | "RANGE_NOT_SATISFIABLE" | "INTERNAL_ERROR";
+        ErrorReason: "VALIDATION_ERROR" | "MALFORMED_REQUEST" | "SLUG_TAKEN" | "IDEMPOTENCY_KEY_REUSED" | "NAMESPACE_EXISTS" | "NAMESPACE_PROTECTED" | "NAMESPACE_NOT_EMPTY" | "CREDENTIAL_INVALID" | "INSUFFICIENT_SCOPE" | "INSUFFICIENT_ROLE" | "TENANT_SUSPENDED" | "EMAIL_NOT_VERIFIED" | "RESOURCE_NOT_FOUND" | "TENANT_SELECTION_REQUIRED" | "TENANT_NOT_RESOLVED" | "TENANT_NOT_A_MEMBER" | "NAMESPACE_NOT_FOUND" | "QUOTA_STORAGE_EXCEEDED" | "QUOTA_EGRESS_EXCEEDED" | "OBJECT_TOO_LARGE" | "RATE_LIMITED" | "DAILY_LIMIT_REACHED" | "UPLOAD_NOT_FOUND" | "UPLOAD_EXPIRED" | "UPLOAD_INCOMPLETE" | "UPLOAD_CHECKSUM_MISMATCH" | "UPLOAD_SIZE_MISMATCH" | "PART_CHECKSUM_MISMATCH" | "CONTENT_TYPE_NOT_ALLOWED" | "OBJECT_UPLOADING" | "OBJECT_VERIFYING" | "OBJECT_PROCESSING" | "OBJECT_CORRUPT" | "OBJECT_DELETED" | "VERSION_NOT_FOUND" | "PRECONDITION_FAILED" | "OBJECT_MISSING" | "STORAGE_UNAVAILABLE" | "DATABASE_UNAVAILABLE" | "TIER_NOT_ALLOWED" | "IDENTITY_UNAVAILABLE" | "PASSIVE_SLOT_RESTRICTED" | "JOB_NOT_FOUND" | "SEARCH_UNAVAILABLE" | "WEBHOOK_URL_NOT_ALLOWED" | "PLAN_REQUEST_CONFLICT" | "NOT_FOUND" | "METHOD_NOT_ALLOWED" | "NOT_ACCEPTABLE" | "PAYLOAD_TOO_LARGE" | "UNSUPPORTED_MEDIA_TYPE" | "RANGE_NOT_SATISFIABLE" | "INTERNAL_ERROR";
         /** @example acme */
         TenantSlug: string;
         /** @example photos */
@@ -2118,7 +2102,7 @@ export interface components {
             toPlan: string;
             toPlanName: string;
             /** @enum {string} */
-            status: "PENDING" | "AWAITING_PAYMENT" | "APPROVED" | "REJECTED" | "CANCELLED";
+            status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
             /** Format: int64 */
             amountCents: number;
             currency: string;
@@ -2133,16 +2117,25 @@ export interface components {
             plans: components["schemas"]["PlanOffer"][];
             /** Format: int64 */
             storedBytes: number;
+            /**
+             * Format: int64
+             * @description Bytes of uploads in progress.
+             */
+            reservedBytes: number;
             /** Format: int64 */
             maxStorageBytes: number;
+            /** @description The request waiting for a decision. */
             pending?: components["schemas"]["PlanRequest"] | null;
+            /** @description The latest approved or declined request of the last 30 days, with the operator's note. */
+            lastDecision?: components["schemas"]["PlanRequest"] | null;
         };
         PlanRequestStarted: {
             request: components["schemas"]["PlanRequest"];
-            /** @enum {string} */
-            next: "APPROVAL" | "PAYMENT" | "DONE";
-            /** @description Where to pay when `next` is `PAYMENT`. */
-            redirectUrl?: string | null;
+            /**
+             * @description APPROVAL waits for a decision; DONE applied it.
+             * @enum {string}
+             */
+            next: "APPROVAL" | "DONE";
         };
         OperatorPlanRequest: {
             request: components["schemas"]["PlanRequest"];
@@ -2152,6 +2145,8 @@ export interface components {
             tenantSlug: string;
             /** Format: int64 */
             storedBytes: number;
+            /** @description Email of who asked */
+            contactEmail?: string | null;
         };
         PlanDecision: {
             /** @description Shown to the customer. */
@@ -3243,11 +3238,6 @@ export interface components {
         };
         OperatorPlanRequestListResponse: components["schemas"]["Envelope"] & {
             data?: components["schemas"]["OperatorPlanRequest"][];
-        };
-        WebhookSettledResponse: components["schemas"]["Envelope"] & {
-            data?: {
-                settled: boolean;
-            };
         };
     };
     responses: {
@@ -6340,34 +6330,6 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
-    paymentWebhook: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                provider: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "*/*": string;
-            };
-        };
-        responses: {
-            /** @description Whether a request was settled by this notification. */
-            200: {
-                headers: {
-                    "X-Request-Id": components["headers"]["X-Request-Id"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WebhookSettledResponse"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-        };
-    };
     operatorListTenants: {
         parameters: {
             query?: never;
@@ -6592,6 +6554,7 @@ export interface operations {
                     "application/json": components["schemas"]["PlanRequestResponse"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -6623,6 +6586,7 @@ export interface operations {
                     "application/json": components["schemas"]["PlanRequestResponse"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

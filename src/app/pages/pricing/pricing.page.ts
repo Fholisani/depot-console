@@ -1,30 +1,43 @@
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, OnInit, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { IonButton, IonSpinner } from '@ionic/angular';
+import { firstValueFrom } from 'rxjs';
+import { DepotApi } from '../../core/api/depot-api.service';
+import type { PlanOffer } from '../../core/api/models';
+import { formatMoney, formatPlanSize } from '../../core/ui/format';
 
-interface PricingPlan {
+/** Wording for one plan from `pricing.json` (matched by plan name); prices and limits come from the API. */
+interface PlanCopy {
   id: string;
-  name: string;
-  /** Monthly price; null when it is not set yet. */
-  price: number | null;
-  period: string;
-  summary: string;
-  features: string[];
-  cta: string;
-  available: boolean;
-  /** Where the button goes; sign-up when missing. Paid plans go to the plan page (signs in first). */
+  summary?: string;
+  /** Extra lines after the storage and download limits. */
+  features?: string[];
+  cta?: string;
+  /** Where the button goes; sign-up when missing. */
   link?: string;
 }
 
-interface Pricing {
-  currency: string;
-  plans: PricingPlan[];
+interface PricingCopy {
+  plans: PlanCopy[];
   note?: string;
 }
 
+/** A plan as the page shows it. */
+interface Card {
+  name: string;
+  title: string;
+  price: string;
+  paid: boolean;
+  summary: string | null;
+  features: string[];
+  cta: string;
+  link: string;
+}
+
 /**
- * Plans, read from `pricing.json` next to `index.html`, so prices and limits change without a
- * new build. Keep the limits there equal to the operator's plan quotas.
+ * Plans with the prices and limits the API enforces (`GET /v1/public/plans`), so they can never disagree.
+ * The wording around them (summary, extra features, button) comes from `pricing.json` next to `index.html`,
+ * so it changes without a new build.
  */
 @Component({
   selector: 'app-pricing',
@@ -35,29 +48,24 @@ interface Pricing {
       <p class="muted">Start free. Pay only when you need more.</p>
     </section>
     <section class="container">
-      @if (pricing(); as p) {
+      @if (cards(); as list) {
         <div class="plans">
-          @for (plan of p.plans; track plan.id) {
-            <div class="card plan" [class.featured]="plan.available && plan.price === 0">
-              <h2>{{ plan.name }}</h2>
+          @for (c of list; track c.name) {
+            <div class="card plan" [class.featured]="!c.paid">
+              <h2>{{ c.title }}</h2>
               <p class="price">
-                @if (plan.price === null) {
-                  <span class="amount">Soon</span>
-                } @else {
-                  <span class="amount">{{ money(plan.price, p.currency) }}</span>
-                  @if (plan.price > 0) { <span class="muted">/ {{ plan.period }}</span> }
-                }
+                <span class="amount">{{ c.price }}</span>
+                @if (c.paid) { <span class="muted">/ month</span> }
               </p>
-              <p class="muted">{{ plan.summary }}</p>
+              @if (c.summary) { <p class="muted">{{ c.summary }}</p> }
               <ul>
-                @for (f of plan.features; track f) { <li>{{ f }}</li> }
+                @for (f of c.features; track f) { <li>{{ f }}</li> }
               </ul>
-              <ion-button expand="block" [disabled]="!plan.available" [routerLink]="plan.link ?? '/signup'"
-                [fill]="plan.available ? 'solid' : 'outline'">{{ plan.cta }}</ion-button>
+              <ion-button expand="block" [routerLink]="c.link">{{ c.cta }}</ion-button>
             </div>
           }
         </div>
-        @if (p.note) { <p class="muted note">{{ p.note }}</p> }
+        @if (note()) { <p class="muted note">{{ note() }}</p> }
       } @else if (failed()) {
         <p class="muted">Pricing could not be loaded. The free plan includes 10 GB of storage.</p>
       } @else {
@@ -79,24 +87,48 @@ interface Pricing {
   `],
 })
 export class PricingPage implements OnInit {
-  protected readonly pricing = signal<Pricing | null>(null);
+  private readonly api = inject(DepotApi);
+  protected readonly cards = signal<Card[] | null>(null);
+  protected readonly note = signal<string | null>(null);
   protected readonly failed = signal(false);
 
   async ngOnInit(): Promise<void> {
+    const copy = this.loadCopy();
     try {
-      const res = await fetch(new URL('pricing.json', document.baseURI), { cache: 'no-cache' });
-      if (!res.ok) {
-        throw new Error(String(res.status));
-      }
-      this.pricing.set((await res.json()) as Pricing);
+      const plans = await firstValueFrom(this.api.plans());
+      const words = await copy;
+      this.note.set(words.note ?? null);
+      this.cards.set(plans.map((p) => card(p, words.plans.find((c) => c.id === p.name))));
     } catch {
       this.failed.set(true);
     }
   }
 
-  protected money(amount: number, currency: string): string {
-    return amount === 0
-      ? 'Free'
-      : new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount);
+  /** The wording; none (plain cards) when the file cannot be read. */
+  private async loadCopy(): Promise<PricingCopy> {
+    try {
+      const res = await fetch(new URL('pricing.json', document.baseURI), { cache: 'no-cache' });
+      return res.ok ? ((await res.json()) as PricingCopy) : { plans: [] };
+    } catch {
+      return { plans: [] };
+    }
   }
+}
+
+function card(p: PlanOffer, copy: PlanCopy | undefined): Card {
+  const limits = [`${formatPlanSize(p.maxStorageBytes)} storage`];
+  if (p.maxEgressBytesPerMonth > 0) {
+    limits.push(`${formatPlanSize(p.maxEgressBytesPerMonth)} downloads a month`);
+  }
+  const paid = p.priceCents > 0;
+  return {
+    name: p.name,
+    title: p.displayName,
+    price: formatMoney(p.priceCents, p.currency),
+    paid,
+    summary: copy?.summary ?? p.description ?? null,
+    features: [...limits, ...(copy?.features ?? [])],
+    cta: copy?.cta ?? (paid ? `Choose ${p.displayName}` : 'Start free'),
+    link: copy?.link ?? (paid ? '/app/plan' : '/signup'),
+  };
 }

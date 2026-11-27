@@ -1,52 +1,35 @@
 {
-  "currency": "ZAR",
   "plans": [
     {
       "id": "free",
-      "name": "Free",
-      "price": 0,
-      "period": "month",
-      "summary": "For trying Depot and small projects.",
+      "summary": "For trying Depot and a first set of photos.",
       "features": [
-        "10 GB storage",
-        "50 GB downloads a month",
         "Version history and 30-day undelete",
         "Search and tags",
+        "Shared albums and links",
         "API access with keys"
       ],
       "cta": "Start free",
-      "available": true
+      "link": "/signup"
     },
     {
       "id": "family",
-      "name": "Family",
-      "price": 15,
-      "period": "month",
       "summary": "For a family's photos and videos.",
       "features": [
-        "50 GB storage",
-        "200 GB downloads a month",
         "Everything in Free"
       ],
       "cta": "Choose Family",
-      "available": true,
       "link": "/app/plan"
     },
     {
       "id": "plus",
-      "name": "Plus",
-      "price": 55,
-      "period": "month",
       "summary": "For big collections and lots of video.",
       "features": [
-        "200 GB storage",
-        "500 GB downloads a month",
         "Everything in Family"
       ],
       "cta": "Choose Plus",
-      "available": true,
       "link": "/app/plan"
     }
   ],
-  "note": "Already have an account? Choose a plan and we switch you over once it is approved. We contact you about payment."
+  "note": "Choose a plan after signing in. We get in touch about payment and switch you over once it is approved."
 }

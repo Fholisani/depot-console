@@ -1,5 +1,6 @@
 import { Routes } from '@angular/router';
 import { autoLoginPartialRoutesGuard } from 'angular-auth-oidc-client';
+import { operatorGuard } from './pages/operator/operator.guard';
 
 export const routes: Routes = [
   // Public site (no sign-in), inside the shared header and footer.
@@ -60,6 +61,7 @@ export const routes: Routes = [
       },
       {
         path: 'operator',
+        canActivate: [operatorGuard],
         loadComponent: () => import('./pages/operator/operator.page').then((m) => m.OperatorPage),
       },
       {
